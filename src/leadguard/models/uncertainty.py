@@ -195,7 +195,6 @@ def _ensemble_disagreement(
     Returns:
         Array of per-row std deviation of P(Lead) across seeds.
     """
-    import xgboost as xgb  # noqa: PLC0415
 
     # Simpler approach: bootstrap prediction from the real model with jittered features
     model_xgb = model
