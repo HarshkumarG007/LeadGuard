@@ -11,7 +11,6 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-
 # ---------------------------------------------------------------------------
 # Shared sub-models
 # ---------------------------------------------------------------------------
@@ -99,9 +98,7 @@ class InspectionSubmitRequest(BaseModel):
     """Request body for POST /v1/inspections."""
 
     property_id: str
-    inspected_material: str = Field(
-        ..., pattern="^(Lead|Copper|Galvanized|Unknown)$"
-    )
+    inspected_material: str = Field(..., pattern="^(Lead|Copper|Galvanized|Unknown)$")
     source: str = Field(
         default="field_inspection", pattern="^(field_inspection|self_report_verified)$"
     )

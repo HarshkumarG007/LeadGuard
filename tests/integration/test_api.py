@@ -6,8 +6,6 @@ Requires the API server to be running OR uses TestClient.
 
 from __future__ import annotations
 
-import json
-from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -19,12 +17,15 @@ def client() -> TestClient:
     """Create a TestClient for the FastAPI app."""
     # Set correct working directory for model loading
     import os
+
     os.chdir(Path(__file__).parent.parent.parent)
 
     from api.model_loader import reset_state
+
     reset_state()
 
     from api.main import app
+
     return TestClient(app)
 
 
@@ -40,6 +41,7 @@ def sample_property_id(client: TestClient) -> str:
     sample_path = Path("data/sample/sample_properties.parquet")
     if sample_path.exists():
         import pandas as pd
+
         df = pd.read_parquet(sample_path)
         return str(df["property_id"].iloc[0])
     return "chi-00000000"
@@ -131,12 +133,15 @@ class TestInspectionsEndpoint:
 
     def test_submit_inspection(self, client: TestClient, sample_property_id: str) -> None:
         """Valid inspection submission returns 200 with inspection_id."""
-        resp = client.post("/v1/inspections", json={
-            "property_id": sample_property_id,
-            "inspected_material": "Copper",
-            "source": "field_inspection",
-            "cost_usd": 500.0,
-        })
+        resp = client.post(
+            "/v1/inspections",
+            json={
+                "property_id": sample_property_id,
+                "inspected_material": "Copper",
+                "source": "field_inspection",
+                "cost_usd": 500.0,
+            },
+        )
         assert resp.status_code == 200
         body = resp.json()
         assert "inspection_id" in body
@@ -144,10 +149,13 @@ class TestInspectionsEndpoint:
 
     def test_invalid_material_returns_422(self, client: TestClient) -> None:
         """Invalid material should return 422."""
-        resp = client.post("/v1/inspections", json={
-            "property_id": "some-id",
-            "inspected_material": "PVC",  # not in allowed set
-        })
+        resp = client.post(
+            "/v1/inspections",
+            json={
+                "property_id": "some-id",
+                "inspected_material": "PVC",  # not in allowed set
+            },
+        )
         assert resp.status_code == 422
 
 

@@ -25,12 +25,14 @@ def sample_predictions() -> pd.DataFrame:
     rng = np.random.default_rng(42)
     n = 300
     tracts = [f"17031{str(i).zfill(6)}" for i in rng.integers(1, 20, n)]
-    return pd.DataFrame({
-        "property_id": [f"chi-{i:06d}" for i in range(n)],
-        "census_tract": tracts,
-        "p_lead_calibrated": rng.uniform(0.1, 0.9, n),
-        "service_line_material": rng.choice(["Lead", "Copper", "Galvanized"], n),
-    })
+    return pd.DataFrame(
+        {
+            "property_id": [f"chi-{i:06d}" for i in range(n)],
+            "census_tract": tracts,
+            "p_lead_calibrated": rng.uniform(0.1, 0.9, n),
+            "service_line_material": rng.choice(["Lead", "Copper", "Galvanized"], n),
+        }
+    )
 
 
 @pytest.fixture
@@ -38,9 +40,11 @@ def sample_inspections() -> pd.DataFrame:
     """Synthetic inspections DataFrame."""
     rng = np.random.default_rng(1)
     n = 50
-    return pd.DataFrame({
-        "census_tract": [f"17031{str(i).zfill(6)}" for i in rng.integers(1, 10, n)],
-    })
+    return pd.DataFrame(
+        {
+            "census_tract": [f"17031{str(i).zfill(6)}" for i in rng.integers(1, 10, n)],
+        }
+    )
 
 
 class TestEquityBoost:
@@ -57,10 +61,12 @@ class TestEquityBoost:
     def test_equity_boost_zero_when_over_inspected(self) -> None:
         """A tract that received all inspections should get zero boost (never negative)."""
         # Single tract — all inspections concentrated here
-        preds = pd.DataFrame({
-            "census_tract": ["17031000001"] * 100,
-            "p_lead_calibrated": [0.5] * 100,
-        })
+        preds = pd.DataFrame(
+            {
+                "census_tract": ["17031000001"] * 100,
+                "p_lead_calibrated": [0.5] * 100,
+            }
+        )
         # All inspections in same tract → actual_share = 1.0, target_share = 1.0
         insp = pd.DataFrame({"census_tract": ["17031000001"] * 50})
         boost = compute_equity_boost(preds, insp)
@@ -69,10 +75,12 @@ class TestEquityBoost:
 
     def test_equity_boost_positive_when_under_inspected(self) -> None:
         """A tract with high risk share but zero inspections should get a positive boost."""
-        preds = pd.DataFrame({
-            "census_tract": ["17031000001"] * 80 + ["17031000002"] * 20,
-            "p_lead_calibrated": [0.9] * 80 + [0.1] * 20,
-        })
+        preds = pd.DataFrame(
+            {
+                "census_tract": ["17031000001"] * 80 + ["17031000002"] * 20,
+                "p_lead_calibrated": [0.9] * 80 + [0.1] * 20,
+            }
+        )
         # All inspections in tract 2 — tract 1 under-inspected relative to its risk
         insp = pd.DataFrame({"census_tract": ["17031000002"] * 10})
         boost = compute_equity_boost(preds, insp)
@@ -89,10 +97,12 @@ class TestEquityBoost:
 
     def test_equity_boost_weights_sum_correctly(self) -> None:
         """Equity boost computation should be deterministic."""
-        preds = pd.DataFrame({
-            "census_tract": ["A", "B"],
-            "p_lead_calibrated": [0.8, 0.2],
-        })
+        preds = pd.DataFrame(
+            {
+                "census_tract": ["A", "B"],
+                "p_lead_calibrated": [0.8, 0.2],
+            }
+        )
         insp = pd.DataFrame(columns=["census_tract"])
         boost1 = compute_equity_boost(preds, insp)
         boost2 = compute_equity_boost(preds, insp)
@@ -110,11 +120,28 @@ class TestNoDemographicLeakageFromFairness:
         """Sample features DataFrame must not contain any forbidden demographic column."""
         # Simulate a features DataFrame (as would be loaded from features.parquet)
         sample_features_cols = [
-            "property_id", "address", "zip_code", "ward", "latitude", "longitude",
-            "year_built", "property_class", "lot_size_sqft", "building_sqft", "stories",
-            "has_basement", "h3_index_res8", "h3_index_res9", "dist_to_nearest_hydrant_m",
-            "dist_to_nearest_known_lead_m", "neighbor_lead_rate_h3res8", "knn10_lead_rate",
-            "census_tract", "service_line_material", "material_source", "last_updated",
+            "property_id",
+            "address",
+            "zip_code",
+            "ward",
+            "latitude",
+            "longitude",
+            "year_built",
+            "property_class",
+            "lot_size_sqft",
+            "building_sqft",
+            "stories",
+            "has_basement",
+            "h3_index_res8",
+            "h3_index_res9",
+            "dist_to_nearest_hydrant_m",
+            "dist_to_nearest_known_lead_m",
+            "neighbor_lead_rate_h3res8",
+            "knn10_lead_rate",
+            "census_tract",
+            "service_line_material",
+            "material_source",
+            "last_updated",
         ]
         forbidden_present = FORBIDDEN_IN_FEATURES & set(sample_features_cols)
         assert not forbidden_present, (

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
 from leadguard.evaluation.explainability import extract_top_shap_features
 
@@ -14,7 +13,14 @@ class TestExtractTopSHAPFeatures:
     def test_returns_top_n_features(self) -> None:
         """Should return exactly top_n features."""
         shap_row = np.array([0.1, -0.5, 0.3, -0.2, 0.8, 0.05])
-        features = ["year_built", "lot_size", "building_sqft", "stories", "dist_hydrant", "knn_rate"]
+        features = [
+            "year_built",
+            "lot_size",
+            "building_sqft",
+            "stories",
+            "dist_hydrant",
+            "knn_rate",
+        ]
         result = extract_top_shap_features(shap_row, features, top_n=3)
         assert len(result) == 3
 

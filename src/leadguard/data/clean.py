@@ -12,13 +12,12 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pandas as pd
 
 from leadguard.data.validation import INTERIM_SCHEMA
-from leadguard.utils.seed import SEED
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +86,9 @@ def load_chicago_water(path: Path) -> pd.DataFrame:
         "not determined": "Unknown",
     }
     if "service_line_material" in df.columns:
-        df["service_line_material"] = df["service_line_material"].str.strip().str.lower().map(mat_map)
+        df["service_line_material"] = (
+            df["service_line_material"].str.strip().str.lower().map(mat_map)
+        )
 
     return df
 
@@ -167,7 +168,9 @@ def clean(
         # Sample mode: load the pre-generated sample parquet
         sample_files = list(input_dir.glob("*.parquet"))
         if sample_files:
-            logger.info("Sample mode: loading %d parquet file(s) from %s", len(sample_files), input_dir)
+            logger.info(
+                "Sample mode: loading %d parquet file(s) from %s", len(sample_files), input_dir
+            )
             df = pd.concat([pd.read_parquet(f) for f in sample_files], ignore_index=True)
         else:
             raise FileNotFoundError(f"No parquet files found in sample dir: {input_dir}")
@@ -189,15 +192,32 @@ def clean(
             df["_addr_norm"] = df["address"].apply(normalize_address)
             assessor["_addr_norm"] = assessor["address"].apply(normalize_address)
             df = df.merge(
-                assessor[["_addr_norm", "pin", "year_built", "property_class",
-                          "lot_size_sqft", "building_sqft", "stories", "has_basement"]],
+                assessor[
+                    [
+                        "_addr_norm",
+                        "pin",
+                        "year_built",
+                        "property_class",
+                        "lot_size_sqft",
+                        "building_sqft",
+                        "stories",
+                        "has_basement",
+                    ]
+                ],
                 on="_addr_norm",
                 how="left",
             ).drop(columns=["_addr_norm"])
             logger.info("Joined assessor data: %d rows", len(df))
         else:
             logger.warning("Assessor data not found at %s — proceeding without it", assessor_path)
-            for col in ["pin", "year_built", "property_class", "lot_size_sqft", "building_sqft", "stories"]:
+            for col in [
+                "pin",
+                "year_built",
+                "property_class",
+                "lot_size_sqft",
+                "building_sqft",
+                "stories",
+            ]:
                 df[col] = None
             df["has_basement"] = False
 
@@ -240,10 +260,12 @@ def clean(
         df["census_tract"] = None
 
     # --- timestamp ---
-    df["last_updated"] = datetime.now(timezone.utc).replace(tzinfo=None)
+    df["last_updated"] = datetime.now(UTC).replace(tzinfo=None)
 
     # --- has_basement coerce ---
-    df["has_basement"] = df.get("has_basement", pd.Series([False] * len(df))).fillna(False).astype(bool)
+    df["has_basement"] = (
+        df.get("has_basement", pd.Series([False] * len(df))).fillna(False).astype(bool)
+    )
 
     # --- Validate with Pandera ---
     logger.info("Validating against INTERIM_SCHEMA (%d rows)", len(df))
@@ -255,16 +277,22 @@ def clean(
     return validated
 
 
-if __name__ == "__main__":
+def main():
     import argparse
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
     parser = argparse.ArgumentParser(description="Clean and validate LeadGuard raw data")
     parser.add_argument("--input", default="data/raw", help="Input directory (raw or sample)")
-    parser.add_argument("--output", default="data/interim/properties.parquet", help="Output parquet path")
+    parser.add_argument(
+        "--output", default="data/interim/properties.parquet", help="Output parquet path"
+    )
     args = parser.parse_args()
 
     # Auto-detect sample mode
     sample_mode = "sample" in str(args.input)
     clean(input_dir=args.input, output_path=args.output, sample_mode=sample_mode)
     print("CLEAN DONE")
+
+
+if __name__ == "__main__":
+    main()

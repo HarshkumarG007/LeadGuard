@@ -73,7 +73,9 @@ def compute_priority_score(
         ValueError: If weights don't approximately sum to 1.
     """
     if abs(lambda1 + lambda2 + lambda3 - 1.0) > 1e-4:
-        raise ValueError(f"Weights must sum to 1.0: {lambda1}+{lambda2}+{lambda3}={lambda1+lambda2+lambda3}")
+        raise ValueError(
+            f"Weights must sum to 1.0: {lambda1}+{lambda2}+{lambda3}={lambda1 + lambda2 + lambda3}"
+        )
     return lambda1 * p_lead + lambda2 * uncertainty_score + lambda3 * equity_boost
 
 
@@ -102,9 +104,11 @@ def simulate_active_learning(
     Returns:
         DataFrame with columns [round, strategy, cumulative_inspections, pr_auc, cost_usd_spent].
     """
-    import xgboost as xgb  # noqa: PLC0415
     import pickle  # noqa: PLC0415
+
+    import xgboost as xgb  # noqa: PLC0415
     from sklearn.metrics import average_precision_score  # noqa: PLC0415
+
     from leadguard.models.xgboost_model import XGB_FEATURES  # noqa: PLC0415
 
     features_path = Path(features_path)
@@ -144,7 +148,11 @@ def simulate_active_learning(
     conformal = None
     if conformal_path.exists():
         # Must import into namespace so pickle can resolve the class
-        from leadguard.models.uncertainty import SplitConformalPredictor, MondriancConformalPredictor  # noqa: F401
+        from leadguard.models.uncertainty import (  # noqa: F401
+            MondriancConformalPredictor,
+            SplitConformalPredictor,
+        )
+
         with conformal_path.open("rb") as f:
             conformal = pickle.load(f)
 
@@ -187,14 +195,22 @@ def simulate_active_learning(
                 proba_test = model.predict_proba(X_test)[:, 1]
                 pr_auc = float(average_precision_score(y_test, proba_test))
 
-            results.append({
-                "round": round_num,
-                "strategy": strategy,
-                "cumulative_inspections": len(currently_labeled_idx),
-                "pr_auc": pr_auc,
-                "cost_usd_spent": cumulative_cost,
-            })
-            logger.info("[%s] Round %d: PR-AUC=%.4f, labeled=%d", strategy, round_num, pr_auc, len(currently_labeled_idx))
+            results.append(
+                {
+                    "round": round_num,
+                    "strategy": strategy,
+                    "cumulative_inspections": len(currently_labeled_idx),
+                    "pr_auc": pr_auc,
+                    "cost_usd_spent": cumulative_cost,
+                }
+            )
+            logger.info(
+                "[%s] Round %d: PR-AUC=%.4f, labeled=%d",
+                strategy,
+                round_num,
+                pr_auc,
+                len(currently_labeled_idx),
+            )
 
             # Select next batch
             n_select = min(batch_size, len(remaining_labeled_idx))
@@ -211,7 +227,9 @@ def simulate_active_learning(
                 if conformal is not None:
                     proba_all = model.predict_proba(X_cand)
                     scores = 1.0 - proba_all.max(axis=1)
-                    uncertainty = np.clip((scores - 0.0) / max(1 - conformal.threshold_, 1e-6), 0.0, 1.0)
+                    uncertainty = np.clip(
+                        (scores - 0.0) / max(1 - conformal.threshold_, 1e-6), 0.0, 1.0
+                    )
                 else:
                     # Fallback: use entropy as uncertainty
                     p = np.clip(p_lead, 1e-6, 1 - 1e-6)
@@ -221,7 +239,11 @@ def simulate_active_learning(
                 # Equity boost
                 if not fairness_ref.empty and "census_tract" in cand_df.columns:
                     current_inspections = pd.DataFrame(
-                        {"census_tract": labeled.loc[list(currently_labeled_idx), "census_tract"].values}
+                        {
+                            "census_tract": labeled.loc[
+                                list(currently_labeled_idx), "census_tract"
+                            ].values
+                        }
                     )
                     pred_df = cand_df[["census_tract"]].copy()
                     pred_df["p_lead_calibrated"] = p_lead
@@ -232,12 +254,16 @@ def simulate_active_learning(
                     # Merge tract to get equity boost per property
                     boost_series = compute_equity_boost(all_pred_df, current_inspections)
                     cand_df2 = cand_df[["census_tract"]].copy()
-                    cand_df2["_equity_boost"] = cand_df2["census_tract"].map(boost_series).fillna(0.0).values
+                    cand_df2["_equity_boost"] = (
+                        cand_df2["census_tract"].map(boost_series).fillna(0.0).values
+                    )
                     equity_boost_vals = cand_df2["_equity_boost"].values
                 else:
                     equity_boost_vals = np.zeros(len(cand_df))
 
-                priority = compute_priority_score(p_lead, uncertainty, equity_boost_vals, lambda1, lambda2, lambda3)
+                priority = compute_priority_score(
+                    p_lead, uncertainty, equity_boost_vals, lambda1, lambda2, lambda3
+                )
                 select_pos = np.argsort(priority)[::-1][:n_select]
                 selected = [remaining_labeled_idx[i] for i in select_pos]
             else:
@@ -254,7 +280,9 @@ def simulate_active_learning(
 
             cumulative_cost += round_cost
             currently_labeled_idx.update(selected)
-            remaining_labeled_idx = [i for i in remaining_labeled_idx if i not in currently_labeled_idx]
+            remaining_labeled_idx = [
+                i for i in remaining_labeled_idx if i not in currently_labeled_idx
+            ]
 
     curve_df = pd.DataFrame(results)
     output_path = Path(output_path)
@@ -264,7 +292,7 @@ def simulate_active_learning(
     return curve_df
 
 
-if __name__ == "__main__":
+def main():
     import argparse
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -279,3 +307,7 @@ if __name__ == "__main__":
         if len(unc_pr) and len(rand_pr):
             print(f"Round 5: uncertainty PR-AUC={unc_pr[0]:.4f}, random PR-AUC={rand_pr[0]:.4f}")
     print("PHASE 7 PASS")
+
+
+if __name__ == "__main__":
+    main()

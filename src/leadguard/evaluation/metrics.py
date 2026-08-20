@@ -93,7 +93,9 @@ def geographic_split(
     test = labeled[labeled["ward"].isin(holdout_wards)]
     logger.info(
         "Geographic split: wards %s held out — train=%d, test=%d",
-        holdout_wards, len(train), len(test),
+        holdout_wards,
+        len(train),
+        len(test),
     )
     return train, test
 
@@ -142,7 +144,11 @@ def compute_metrics(
     if split_name:
         logger.info(
             "[%s] PR-AUC=%.4f  ROC-AUC=%.4f  F2=%.4f  Brier=%.4f",
-            split_name, metrics["pr_auc"], metrics["roc_auc"], metrics["f2"], metrics["brier_score"],
+            split_name,
+            metrics["pr_auc"],
+            metrics["roc_auc"],
+            metrics["f2"],
+            metrics["brier_score"],
         )
     return metrics
 
@@ -171,12 +177,16 @@ def check_leakage_gap(
         logger.error(
             "LEAKAGE SUSPECTED: random-split PR-AUC (%.4f) exceeds geo-split (%.4f) "
             "by %.1f%% > %.0f%% threshold",
-            random_pr_auc, geo_pr_auc, relative_gap * 100, max_gap * 100,
+            random_pr_auc,
+            geo_pr_auc,
+            relative_gap * 100,
+            max_gap * 100,
         )
         return False
     logger.info(
         "Leakage check PASS: random/geo gap = %.1f%% (threshold %.0f%%)",
-        relative_gap * 100, max_gap * 100,
+        relative_gap * 100,
+        max_gap * 100,
     )
     return True
 

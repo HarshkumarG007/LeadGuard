@@ -7,8 +7,6 @@ verified as part of CI configuration.
 
 from __future__ import annotations
 
-import pytest
-
 from leadguard.data.features import _FORBIDDEN_COLUMNS
 from leadguard.evaluation.fairness import FORBIDDEN_IN_FEATURES
 
@@ -52,11 +50,12 @@ class TestNoDemographicLeakage:
         """BASELINE_FEATURES and FULL_FEATURES must not contain forbidden columns."""
         from leadguard.models.baseline import BASELINE_FEATURES, FULL_FEATURES  # noqa: PLC0415
 
-        for feature_set, name in [(BASELINE_FEATURES, "BASELINE_FEATURES"), (FULL_FEATURES, "FULL_FEATURES")]:
+        for feature_set, name in [
+            (BASELINE_FEATURES, "BASELINE_FEATURES"),
+            (FULL_FEATURES, "FULL_FEATURES"),
+        ]:
             forbidden_in_set = ALL_FORBIDDEN & set(feature_set)
-            assert not forbidden_in_set, (
-                f"DEMOGRAPHIC LEAKAGE in {name}: {forbidden_in_set}"
-            )
+            assert not forbidden_in_set, f"DEMOGRAPHIC LEAKAGE in {name}: {forbidden_in_set}"
 
     def test_fairness_forbidden_matches_features_forbidden(self) -> None:
         """Both forbidden sets should agree on the core demographic identifiers."""

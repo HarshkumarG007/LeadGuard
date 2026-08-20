@@ -132,6 +132,7 @@ def load_artifacts(
     if not state.feature_names:
         try:
             from leadguard.models.xgboost_model import XGB_FEATURES  # noqa: PLC0415
+
             state.feature_names = XGB_FEATURES
         except ImportError:
             state.feature_names = []
@@ -169,7 +170,10 @@ def load_artifacts(
 
     logger.info(
         "ModelState ready=%s, conformal=%s, fairness=%s, errors=%d",
-        state.is_ready, state.conformal_ready, state.fairness_ready, len(state.load_errors),
+        state.is_ready,
+        state.conformal_ready,
+        state.fairness_ready,
+        len(state.load_errors),
     )
     return state
 

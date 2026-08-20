@@ -15,12 +15,10 @@ import pytest
 from leadguard.data.features import (
     _FORBIDDEN_COLUMNS,
     build_spatial_features_for_fold,
-    build_base_features,
 )
 from leadguard.utils.geospatial import (
     add_h3_columns,
     compute_neighbor_lead_rate_h3,
-    compute_knn_lead_rate,
 )
 
 
@@ -29,24 +27,28 @@ def synthetic_df() -> pd.DataFrame:
     """Minimal synthetic property DataFrame for testing."""
     rng = np.random.default_rng(42)
     n = 200
-    return pd.DataFrame({
-        "property_id": [f"chi-{i:06d}" for i in range(n)],
-        "address": [f"{i} N TEST ST" for i in range(n)],
-        "zip_code": ["60601"] * n,
-        "ward": rng.integers(1, 10, n).tolist(),
-        "latitude": rng.uniform(41.7, 41.9, n).tolist(),
-        "longitude": rng.uniform(-87.8, -87.6, n).tolist(),
-        "year_built": rng.choice([1900, 1920, 1950, 1970, None], n).tolist(),
-        "property_class": ["Single-family"] * n,
-        "lot_size_sqft": rng.uniform(1000, 10000, n).tolist(),
-        "building_sqft": rng.uniform(500, 3000, n).tolist(),
-        "stories": rng.integers(1, 4, n).tolist(),
-        "has_basement": rng.choice([True, False], n).tolist(),
-        "census_tract": ["17031000100"] * n,
-        "service_line_material": rng.choice(["Lead", "Copper", "Galvanized", None], n, p=[0.2, 0.4, 0.2, 0.2]).tolist(),
-        "material_source": ["inspected"] * n,
-        "last_updated": pd.Timestamp("2026-01-01"),
-    })
+    return pd.DataFrame(
+        {
+            "property_id": [f"chi-{i:06d}" for i in range(n)],
+            "address": [f"{i} N TEST ST" for i in range(n)],
+            "zip_code": ["60601"] * n,
+            "ward": rng.integers(1, 10, n).tolist(),
+            "latitude": rng.uniform(41.7, 41.9, n).tolist(),
+            "longitude": rng.uniform(-87.8, -87.6, n).tolist(),
+            "year_built": rng.choice([1900, 1920, 1950, 1970, None], n).tolist(),
+            "property_class": ["Single-family"] * n,
+            "lot_size_sqft": rng.uniform(1000, 10000, n).tolist(),
+            "building_sqft": rng.uniform(500, 3000, n).tolist(),
+            "stories": rng.integers(1, 4, n).tolist(),
+            "has_basement": rng.choice([True, False], n).tolist(),
+            "census_tract": ["17031000100"] * n,
+            "service_line_material": rng.choice(
+                ["Lead", "Copper", "Galvanized", None], n, p=[0.2, 0.4, 0.2, 0.2]
+            ).tolist(),
+            "material_source": ["inspected"] * n,
+            "last_updated": pd.Timestamp("2026-01-01"),
+        }
+    )
 
 
 class TestNoDemographicLeakage:
@@ -55,7 +57,9 @@ class TestNoDemographicLeakage:
     def test_forbidden_columns_not_in_synthetic_df(self, synthetic_df: pd.DataFrame) -> None:
         """Base features should never include demographic columns."""
         forbidden_present = _FORBIDDEN_COLUMNS & set(synthetic_df.columns)
-        assert not forbidden_present, f"Forbidden demographic columns in DataFrame: {forbidden_present}"
+        assert not forbidden_present, (
+            f"Forbidden demographic columns in DataFrame: {forbidden_present}"
+        )
 
     def test_forbidden_columns_not_in_h3_augmented(self, synthetic_df: pd.DataFrame) -> None:
         """H3 augmentation must not introduce demographic columns."""
@@ -86,11 +90,17 @@ class TestSpatialLagLeakage:
         half_df = compute_neighbor_lead_rate_h3(df, train_half, resolution=8)
         # The rates should differ because training data differs
         # (not necessarily different for every row, but at least some should differ)
-        n_same = (full_df["neighbor_lead_rate_h3res8"] == half_df["neighbor_lead_rate_h3res8"]).sum()
+        n_same = (
+            full_df["neighbor_lead_rate_h3res8"] == half_df["neighbor_lead_rate_h3res8"]
+        ).sum()
         # Allow up to 80% same (some H3 cells may be identical by coincidence)
-        assert n_same < len(df) * 0.99, "Spatial lag rates identical regardless of training partition — possible leakage"
+        assert n_same < len(df) * 0.99, (
+            "Spatial lag rates identical regardless of training partition — possible leakage"
+        )
 
-    def test_build_spatial_features_for_fold_only_uses_train_index(self, synthetic_df: pd.DataFrame) -> None:
+    def test_build_spatial_features_for_fold_only_uses_train_index(
+        self, synthetic_df: pd.DataFrame
+    ) -> None:
         """build_spatial_features_for_fold must not use held-out row data."""
         df = add_h3_columns(synthetic_df)
         df["dist_to_nearest_hydrant_m"] = 500.0
@@ -111,7 +121,9 @@ class TestFeatureSchema:
         df = add_h3_columns(synthetic_df)
         assert "h3_index_res8" in df.columns
         assert "h3_index_res9" in df.columns
-        assert df["h3_index_res8"].dtype == object or str(df["h3_index_res8"].dtype).startswith("str")  # string or StringDtype
+        assert df["h3_index_res8"].dtype == object or str(df["h3_index_res8"].dtype).startswith(
+            "str"
+        )  # string or StringDtype
 
     def test_census_tract_present(self, synthetic_df: pd.DataFrame) -> None:
         """census_tract must be present as a join key but not a model feature."""

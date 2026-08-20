@@ -153,9 +153,18 @@ def train_baselines(
     heuristic = YearBuiltHeuristic()
     X_test_rand, y_test_rand = _prep_xy(test_rand, ["year_built"])
     X_test_geo, y_test_geo = _prep_xy(test_geo, ["year_built"])
-    m_rand = compute_metrics(y_test_rand, heuristic.predict_proba(X_test_rand)[:, 1], split_name="heuristic/random")
-    m_geo = compute_metrics(y_test_geo, heuristic.predict_proba(X_test_geo)[:, 1], split_name="heuristic/geo")
-    all_metrics["heuristic"] = {"pr_auc_random": m_rand["pr_auc"], "pr_auc_geo": m_geo["pr_auc"], **{f"{k}_random": v for k, v in m_rand.items()}, **{f"{k}_geo": v for k, v in m_geo.items()}}
+    m_rand = compute_metrics(
+        y_test_rand, heuristic.predict_proba(X_test_rand)[:, 1], split_name="heuristic/random"
+    )
+    m_geo = compute_metrics(
+        y_test_geo, heuristic.predict_proba(X_test_geo)[:, 1], split_name="heuristic/geo"
+    )
+    all_metrics["heuristic"] = {
+        "pr_auc_random": m_rand["pr_auc"],
+        "pr_auc_geo": m_geo["pr_auc"],
+        **{f"{k}_random": v for k, v in m_rand.items()},
+        **{f"{k}_geo": v for k, v in m_geo.items()},
+    }
 
     # -----------------------------------------------------------------------
     # Baseline 1 — Logistic regression
@@ -177,16 +186,31 @@ def train_baselines(
     )
     X_train_scaled = scaler.fit_transform(X_train_rand)
     lr.fit(X_train_scaled, y_train_rand)
-    m_rand_lr = compute_metrics(y_test_rand_full, lr.predict_proba(scaler.transform(X_test_rand_full))[:, 1], split_name="logistic/random")
+    m_rand_lr = compute_metrics(
+        y_test_rand_full,
+        lr.predict_proba(scaler.transform(X_test_rand_full))[:, 1],
+        split_name="logistic/random",
+    )
 
     # Retrain on geo train split
     scaler_geo = StandardScaler()
     X_train_geo_scaled = scaler_geo.fit_transform(X_train_geo)
-    lr_geo = LogisticRegression(C=1.0, max_iter=1000, solver="lbfgs", random_state=SEED, class_weight="balanced")
+    lr_geo = LogisticRegression(
+        C=1.0, max_iter=1000, solver="lbfgs", random_state=SEED, class_weight="balanced"
+    )
     lr_geo.fit(X_train_geo_scaled, y_train_geo)
-    m_geo_lr = compute_metrics(y_test_geo_full, lr_geo.predict_proba(scaler_geo.transform(X_test_geo_full))[:, 1], split_name="logistic/geo")
+    m_geo_lr = compute_metrics(
+        y_test_geo_full,
+        lr_geo.predict_proba(scaler_geo.transform(X_test_geo_full))[:, 1],
+        split_name="logistic/geo",
+    )
 
-    all_metrics["logistic_regression"] = {"pr_auc_random": m_rand_lr["pr_auc"], "pr_auc_geo": m_geo_lr["pr_auc"], **{f"{k}_random": v for k, v in m_rand_lr.items()}, **{f"{k}_geo": v for k, v in m_geo_lr.items()}}
+    all_metrics["logistic_regression"] = {
+        "pr_auc_random": m_rand_lr["pr_auc"],
+        "pr_auc_geo": m_geo_lr["pr_auc"],
+        **{f"{k}_random": v for k, v in m_rand_lr.items()},
+        **{f"{k}_geo": v for k, v in m_geo_lr.items()},
+    }
 
     # Save LR artifact
     with (output_dir / "logistic_regression.pkl").open("wb") as f:
@@ -204,16 +228,29 @@ def train_baselines(
         class_weight="balanced",
     )
     rf.fit(X_train_rand, y_train_rand)
-    m_rand_rf = compute_metrics(y_test_rand_full, rf.predict_proba(X_test_rand_full)[:, 1], split_name="random_forest/random")
+    m_rand_rf = compute_metrics(
+        y_test_rand_full,
+        rf.predict_proba(X_test_rand_full)[:, 1],
+        split_name="random_forest/random",
+    )
 
     rf_geo = RandomForestClassifier(
         n_estimators=rf_cfg.get("n_estimators", 300),
-        random_state=SEED, n_jobs=-1, class_weight="balanced"
+        random_state=SEED,
+        n_jobs=-1,
+        class_weight="balanced",
     )
     rf_geo.fit(X_train_geo, y_train_geo)
-    m_geo_rf = compute_metrics(y_test_geo_full, rf_geo.predict_proba(X_test_geo_full)[:, 1], split_name="random_forest/geo")
+    m_geo_rf = compute_metrics(
+        y_test_geo_full, rf_geo.predict_proba(X_test_geo_full)[:, 1], split_name="random_forest/geo"
+    )
 
-    all_metrics["random_forest"] = {"pr_auc_random": m_rand_rf["pr_auc"], "pr_auc_geo": m_geo_rf["pr_auc"], **{f"{k}_random": v for k, v in m_rand_rf.items()}, **{f"{k}_geo": v for k, v in m_geo_rf.items()}}
+    all_metrics["random_forest"] = {
+        "pr_auc_random": m_rand_rf["pr_auc"],
+        "pr_auc_geo": m_geo_rf["pr_auc"],
+        **{f"{k}_random": v for k, v in m_rand_rf.items()},
+        **{f"{k}_geo": v for k, v in m_geo_rf.items()},
+    }
 
     # Leakage check on RF
     check_leakage_gap(m_rand_rf["pr_auc"], m_geo_rf["pr_auc"])
@@ -228,7 +265,7 @@ def train_baselines(
     return all_metrics
 
 
-if __name__ == "__main__":
+def main():
     import argparse
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -237,5 +274,15 @@ if __name__ == "__main__":
     parser.add_argument("--features", default="data/processed/features.parquet")
     parser.add_argument("--sample", action="store_true", help="Use sample features")
     args = parser.parse_args()
-    metrics = train_baselines(features_path=args.features, config_path=args.config, sample=args.sample)
-    print(json.dumps({"random_forest": {"pr_auc_geo": metrics["random_forest"]["pr_auc_geo"]}}, indent=2))
+    metrics = train_baselines(
+        features_path=args.features, config_path=args.config, sample=args.sample
+    )
+    print(
+        json.dumps(
+            {"random_forest": {"pr_auc_geo": metrics["random_forest"]["pr_auc_geo"]}}, indent=2
+        )
+    )
+
+
+if __name__ == "__main__":
+    main()

@@ -17,6 +17,7 @@ import time
 from pathlib import Path
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
@@ -44,6 +45,7 @@ def _load_model_and_data(
         Tuple of (model, df, feature_names).
     """
     import xgboost as xgb  # noqa: PLC0415
+
     from leadguard.models.xgboost_model import XGB_FEATURES  # noqa: PLC0415
 
     if sample and not features_path.exists():
@@ -92,10 +94,7 @@ def extract_top_shap_features(
     """
     abs_vals = np.abs(shap_row)
     top_idx = np.argsort(abs_vals)[::-1][:top_n]
-    return [
-        {"feature": feature_names[i], "contribution": float(shap_row[i])}
-        for i in top_idx
-    ]
+    return [{"feature": feature_names[i], "contribution": float(shap_row[i])} for i in top_idx]
 
 
 def generate_global_summary(
@@ -166,9 +165,15 @@ def benchmark_per_prediction_latency(
         latencies.append((time.perf_counter() - t0) * 1000)
 
     median_ms = float(np.median(latencies))
-    logger.info("SHAP per-prediction latency: median=%.1f ms (threshold=%.0f ms)", median_ms, threshold_ms)
+    logger.info(
+        "SHAP per-prediction latency: median=%.1f ms (threshold=%.0f ms)", median_ms, threshold_ms
+    )
     if median_ms > threshold_ms:
-        logger.warning("SHAP latency %.1f ms exceeds %.0f ms API budget — consider caching", median_ms, threshold_ms)
+        logger.warning(
+            "SHAP latency %.1f ms exceeds %.0f ms API budget — consider caching",
+            median_ms,
+            threshold_ms,
+        )
     return median_ms
 
 
@@ -215,7 +220,7 @@ def run_explainability(
     return result
 
 
-if __name__ == "__main__":
+def main():
     import argparse
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -224,3 +229,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     result = run_explainability(sample=args.sample)
     print("PHASE 8 PASS — latency:", result["per_prediction_latency_ms_median"], "ms")
+
+
+if __name__ == "__main__":
+    main()

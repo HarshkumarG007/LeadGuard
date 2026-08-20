@@ -6,9 +6,7 @@ A stage that writes unvalidated data is not done, per the spec §2.
 
 from __future__ import annotations
 
-import pandera as pa
-from pandera import Column, DataFrameSchema, Check
-
+from pandera import Check, Column, DataFrameSchema
 
 # ---------------------------------------------------------------------------
 # Raw Chicago Water Service Line Inventory schema
@@ -115,9 +113,7 @@ FEATURES_SCHEMA = DataFrameSchema(
         "h3_index_res9": Column(str, nullable=False),
         "dist_to_nearest_hydrant_m": Column(float, nullable=False),
         "dist_to_nearest_known_lead_m": Column(float, nullable=False),
-        "neighbor_lead_rate_h3res8": Column(
-            float, checks=Check.in_range(0.0, 1.0), nullable=False
-        ),
+        "neighbor_lead_rate_h3res8": Column(float, checks=Check.in_range(0.0, 1.0), nullable=False),
         "knn10_lead_rate": Column(float, checks=Check.in_range(0.0, 1.0), nullable=False),
         "census_tract": Column(str, nullable=True),
         "service_line_material": Column(str, nullable=True),
@@ -128,9 +124,11 @@ FEATURES_SCHEMA = DataFrameSchema(
         Check(lambda df: df["property_id"].is_unique, error="duplicate property_id in features"),
         # Hard constraint: no demographic columns allowed
         Check(
-            lambda df: not any(
-                col in df.columns
-                for col in ["income_quartile", "median_household_income", "race", "ethnicity"]
+            lambda df: (
+                not any(
+                    col in df.columns
+                    for col in ["income_quartile", "median_household_income", "race", "ethnicity"]
+                )
             ),
             error="DEMOGRAPHIC LEAKAGE: protected-class column found in feature table",
         ),
@@ -147,9 +145,7 @@ FEATURES_SCHEMA = DataFrameSchema(
 FAIRNESS_REFERENCE_SCHEMA = DataFrameSchema(
     {
         "census_tract": Column(str, nullable=False),
-        "income_quartile": Column(
-            int, checks=Check.isin([1, 2, 3, 4]), nullable=False
-        ),
+        "income_quartile": Column(int, checks=Check.isin([1, 2, 3, 4]), nullable=False),
     },
     checks=[
         Check(

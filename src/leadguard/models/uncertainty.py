@@ -93,7 +93,12 @@ class SplitConformalPredictor:
         level = np.ceil((self._n_cal + 1) * (1 - self.alpha)) / self._n_cal
         level = float(np.clip(level, 0.0, 1.0))
         self.threshold_ = float(np.quantile(scores, level))
-        logger.debug("Conformal threshold = %.4f (α=%.2f, n_cal=%d)", self.threshold_, self.alpha, self._n_cal)
+        logger.debug(
+            "Conformal threshold = %.4f (α=%.2f, n_cal=%d)",
+            self.threshold_,
+            self.alpha,
+            self._n_cal,
+        )
 
     def predict_set(self, proba: np.ndarray) -> list[list[str]]:
         """Return conformal prediction sets for each row.
@@ -139,7 +144,11 @@ class MondriancConformalPredictor:
         for q in range(1, 5):
             mask = quartiles == q
             if mask.sum() < 5:
-                logger.warning("Quartile %d has only %d calibration rows; using global predictor", q, mask.sum())
+                logger.warning(
+                    "Quartile %d has only %d calibration rows; using global predictor",
+                    q,
+                    mask.sum(),
+                )
                 pred = SplitConformalPredictor(self.alpha)
                 pred.calibrate(scores)
             else:
@@ -187,7 +196,6 @@ def _ensemble_disagreement(
         Array of per-row std deviation of P(Lead) across seeds.
     """
     import xgboost as xgb  # noqa: PLC0415
-    from sklearn.model_selection import train_test_split  # noqa: PLC0415
 
     probas = []
     for seed in range(n_seeds):
@@ -243,7 +251,6 @@ def calibrate_uncertainty(
         Dictionary with coverage verification results.
     """
     import xgboost as xgb  # noqa: PLC0415
-    from sklearn.model_selection import train_test_split  # noqa: PLC0415
     from sklearn.preprocessing import LabelEncoder  # noqa: PLC0415
 
     model_dir = Path(model_dir)
@@ -268,7 +275,7 @@ def calibrate_uncertainty(
     df = pd.read_parquet(features_path)
     labeled = df[df["service_line_material"].isin(MATERIALS)].copy()
 
-    from leadguard.evaluation.metrics import geographic_split, random_split  # noqa: PLC0415
+    from leadguard.evaluation.metrics import geographic_split  # noqa: PLC0415
     from leadguard.models.xgboost_model import XGB_FEATURES  # noqa: PLC0415
 
     # Use a held-out calibration split (never used in training or test)
@@ -337,7 +344,9 @@ def calibrate_uncertainty(
             q_scores = _nonconformity(proba_test[mask], y_test[mask])
             q_threshold = mondrian_cp._predictors[q].threshold_
             quartile_coverage[q] = float((q_scores <= q_threshold).mean())
-            logger.info("Quartile %d coverage: %.3f (target: %.3f)", q, quartile_coverage[q], 1 - alpha)
+            logger.info(
+                "Quartile %d coverage: %.3f (target: %.3f)", q, quartile_coverage[q], 1 - alpha
+            )
     else:
         logger.warning("fairness_reference.parquet not found; skipping Mondrian calibration")
         mondrian_cp = MondriancConformalPredictor(alpha=alpha)
@@ -349,13 +358,25 @@ def calibrate_uncertainty(
 
     # Ensemble disagreement cross-check
     ensemble_std = _ensemble_disagreement(model, X_test)
-    set_sizes = np.array([len(s) for s in global_cp.predict_set(proba_test if proba_test.ndim > 1 else proba_test.reshape(-1, 1))])
+    set_sizes = np.array(
+        [
+            len(s)
+            for s in global_cp.predict_set(
+                proba_test if proba_test.ndim > 1 else proba_test.reshape(-1, 1)
+            )
+        ]
+    )
     uncertainty_scores = _uncertainty_from_set_size(set_sizes)
 
     corr, _ = pearsonr(uncertainty_scores, ensemble_std)
-    logger.info("Uncertainty vs. ensemble disagreement Pearson correlation: %.3f (threshold: 0.6)", corr)
+    logger.info(
+        "Uncertainty vs. ensemble disagreement Pearson correlation: %.3f (threshold: 0.6)", corr
+    )
     if corr < 0.60:
-        logger.error("CALIBRATION BUG: Pearson correlation %.3f < 0.6 — investigate conformal calibration", corr)
+        logger.error(
+            "CALIBRATION BUG: Pearson correlation %.3f < 0.6 — investigate conformal calibration",
+            corr,
+        )
 
     result = {
         "global_coverage": global_coverage,
@@ -368,7 +389,7 @@ def calibrate_uncertainty(
     return result
 
 
-if __name__ == "__main__":
+def main():
     import argparse
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -377,5 +398,11 @@ if __name__ == "__main__":
     parser.add_argument("--features", default="data/processed/features.parquet")
     parser.add_argument("--sample", action="store_true")
     args = parser.parse_args()
-    result = calibrate_uncertainty(features_path=args.features, config_path=args.config, sample=args.sample)
+    result = calibrate_uncertainty(
+        features_path=args.features, config_path=args.config, sample=args.sample
+    )
     print(result)
+
+
+if __name__ == "__main__":
+    main()

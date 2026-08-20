@@ -18,12 +18,13 @@ import logging
 import time
 from pathlib import Path
 
-import numpy as np
-import pandas as pd
-import yaml
-import xgboost as xgb
-import optuna
 import matplotlib
+import numpy as np
+import optuna
+import pandas as pd
+import xgboost as xgb
+import yaml
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
@@ -87,10 +88,16 @@ def _build_xgb_params(trial: optuna.Trial, cfg: dict, scale_pos_weight: float) -
     ss = cfg.get("optuna", {}).get("search_space", {})
     return {
         "max_depth": trial.suggest_int("max_depth", *ss.get("max_depth", [3, 8])),
-        "learning_rate": trial.suggest_float("learning_rate", *ss.get("learning_rate", [0.01, 0.3]), log=True),
+        "learning_rate": trial.suggest_float(
+            "learning_rate", *ss.get("learning_rate", [0.01, 0.3]), log=True
+        ),
         "subsample": trial.suggest_float("subsample", *ss.get("subsample", [0.6, 1.0])),
-        "colsample_bytree": trial.suggest_float("colsample_bytree", *ss.get("colsample_bytree", [0.6, 1.0])),
-        "min_child_weight": trial.suggest_int("min_child_weight", *ss.get("min_child_weight", [1, 10])),
+        "colsample_bytree": trial.suggest_float(
+            "colsample_bytree", *ss.get("colsample_bytree", [0.6, 1.0])
+        ),
+        "min_child_weight": trial.suggest_int(
+            "min_child_weight", *ss.get("min_child_weight", [1, 10])
+        ),
         "n_estimators": cfg.get("xgboost", {}).get("n_estimators", 500),
         "early_stopping_rounds": cfg.get("xgboost", {}).get("early_stopping_rounds", 30),
         "eval_metric": "aucpr",
@@ -182,11 +189,13 @@ def train_xgboost(
             verbosity=0,
         )
         model.fit(
-            X_tr, y_tr,
+            X_tr,
+            y_tr,
             eval_set=[(X_cal, y_cal)],
             verbose=False,
         )
         from sklearn.metrics import average_precision_score  # noqa: PLC0415
+
         proba = model.predict_proba(X_cal)[:, 1]
         return float(average_precision_score(y_cal, proba))
 
@@ -219,8 +228,12 @@ def train_xgboost(
     final_model.fit(X_tr, y_tr, eval_set=[(X_cal, y_cal)], verbose=False)
 
     # Evaluate on geo holdout
-    m_geo = compute_metrics(y_test, final_model.predict_proba(X_test)[:, 1], split_name="xgboost/geo")
-    m_rand = compute_metrics(y_test_rand, final_model.predict_proba(X_test_rand)[:, 1], split_name="xgboost/random")
+    m_geo = compute_metrics(
+        y_test, final_model.predict_proba(X_test)[:, 1], split_name="xgboost/geo"
+    )
+    m_rand = compute_metrics(
+        y_test_rand, final_model.predict_proba(X_test_rand)[:, 1], split_name="xgboost/random"
+    )
 
     # Leakage gap check (Architecture §7.6)
     leakage_ok = check_leakage_gap(m_rand["pr_auc"], m_geo["pr_auc"])
@@ -262,7 +275,9 @@ def train_xgboost(
     return result
 
 
-def _plot_feature_importance(model: xgb.XGBClassifier, features: list[str], output_path: Path) -> None:
+def _plot_feature_importance(
+    model: xgb.XGBClassifier, features: list[str], output_path: Path
+) -> None:
     """Save a feature importance bar chart.
 
     Args:
@@ -297,7 +312,7 @@ def load_model(model_dir: Path | str = "models/xgboost") -> xgb.XGBClassifier:
     return model
 
 
-if __name__ == "__main__":
+def main():
     import argparse
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -308,3 +323,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     result = train_xgboost(features_path=args.features, config_path=args.config, sample=args.sample)
     print(f"XGBoost geo PR-AUC: {result['pr_auc_geo']:.4f}")
+
+
+if __name__ == "__main__":
+    main()

@@ -7,7 +7,6 @@ All functions are pure (no side effects) to allow safe use in CV folds.
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -45,7 +44,9 @@ def latlng_to_h3(lat: float, lng: float, resolution: int) -> str:
         return h3.geo_to_h3(lat, lng, resolution)  # type: ignore[attr-defined]
 
 
-def add_h3_columns(df: pd.DataFrame, res8_col: str = "h3_index_res8", res9_col: str = "h3_index_res9") -> pd.DataFrame:
+def add_h3_columns(
+    df: pd.DataFrame, res8_col: str = "h3_index_res8", res9_col: str = "h3_index_res9"
+) -> pd.DataFrame:
     """Add H3 index columns at resolutions 8 and 9 to a DataFrame.
 
     Args:
@@ -57,14 +58,8 @@ def add_h3_columns(df: pd.DataFrame, res8_col: str = "h3_index_res8", res9_col: 
         DataFrame with two new H3 index columns appended (string dtype).
     """
     df = df.copy()
-    df[res8_col] = [
-        latlng_to_h3(lat, lng, 8)
-        for lat, lng in zip(df["latitude"], df["longitude"])
-    ]
-    df[res9_col] = [
-        latlng_to_h3(lat, lng, 9)
-        for lat, lng in zip(df["latitude"], df["longitude"])
-    ]
+    df[res8_col] = [latlng_to_h3(lat, lng, 8) for lat, lng in zip(df["latitude"], df["longitude"])]
+    df[res9_col] = [latlng_to_h3(lat, lng, 9) for lat, lng in zip(df["latitude"], df["longitude"])]
     return df
 
 
@@ -113,7 +108,9 @@ def compute_dist_to_nearest(
     """
     df = df.copy()
     if reference_df.empty:
-        logger.warning("Reference DataFrame is empty; defaulting %s to %.0f m", output_col, default_m)
+        logger.warning(
+            "Reference DataFrame is empty; defaulting %s to %.0f m", output_col, default_m
+        )
         df[output_col] = default_m
         return df
 
@@ -132,7 +129,7 @@ def compute_neighbor_lead_rate_h3(
     df: pd.DataFrame,
     train_df: pd.DataFrame,
     resolution: int = 8,
-    h3_col: Optional[str] = None,
+    h3_col: str | None = None,
     output_col: str = "neighbor_lead_rate_h3res8",
 ) -> pd.DataFrame:
     """Compute the fraction of Lead service lines in each H3 cell.

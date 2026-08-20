@@ -24,8 +24,12 @@ class TestPriorityScore:
         """ValueError if weights don't sum to 1."""
         with pytest.raises(ValueError, match="sum to 1"):
             compute_priority_score(
-                np.array([0.5]), np.array([0.5]), np.array([0.5]),
-                lambda1=0.5, lambda2=0.5, lambda3=0.5,
+                np.array([0.5]),
+                np.array([0.5]),
+                np.array([0.5]),
+                lambda1=0.5,
+                lambda2=0.5,
+                lambda3=0.5,
             )
 
     def test_output_range(self) -> None:

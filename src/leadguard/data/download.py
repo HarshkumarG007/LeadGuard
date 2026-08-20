@@ -123,7 +123,6 @@ def download_census_acs(raw_dir: Path, api_key: str = "") -> Path:
     resp.raise_for_status()
 
     import csv
-    import io
 
     data = resp.json()
     with dest.open("w", newline="") as f:
@@ -197,7 +196,11 @@ def download_all(raw_dir: Path | str = "data/raw", census_api_key: str = "") -> 
     # Census ACS
     census_file = "census_acs_cook_county.csv"
     census_dest = raw_dir / census_file
-    if census_dest.exists() and manifest.get(census_file) and _sha256(census_dest) == manifest[census_file]:
+    if (
+        census_dest.exists()
+        and manifest.get(census_file)
+        and _sha256(census_dest) == manifest[census_file]
+    ):
         logger.info("Skipping Census ACS (checksum match)")
     else:
         try:
@@ -227,7 +230,7 @@ def download_all(raw_dir: Path | str = "data/raw", census_api_key: str = "") -> 
         logger.info("All files up to date — no downloads needed")
 
 
-if __name__ == "__main__":
+def main():
     import argparse
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -236,3 +239,7 @@ if __name__ == "__main__":
     parser.add_argument("--census-api-key", default="", help="Census API key (optional)")
     args = parser.parse_args()
     download_all(raw_dir=args.raw_dir, census_api_key=args.census_api_key)
+
+
+if __name__ == "__main__":
+    main()

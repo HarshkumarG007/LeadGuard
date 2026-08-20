@@ -13,7 +13,7 @@ Architecture §1.4: The sample must be:
 from __future__ import annotations
 
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
@@ -64,14 +64,35 @@ def generate_sample(n_rows: int = 7500, output_dir: Path = Path("data/sample")) 
 
     # ZIP codes — simplified set for Chicago
     zip_codes = rng.choice(
-        ["60601", "60602", "60603", "60604", "60607", "60608", "60609",
-         "60610", "60611", "60612", "60613", "60614", "60615", "60616",
-         "60617", "60618", "60619", "60620", "60621", "60622"],
+        [
+            "60601",
+            "60602",
+            "60603",
+            "60604",
+            "60607",
+            "60608",
+            "60609",
+            "60610",
+            "60611",
+            "60612",
+            "60613",
+            "60614",
+            "60615",
+            "60616",
+            "60617",
+            "60618",
+            "60619",
+            "60620",
+            "60621",
+            "60622",
+        ],
         n_rows,
     )
 
     # Property class
-    prop_classes = rng.choice(["Single-family", "Multi-family", "Commercial", "Unknown"], n_rows, p=[0.5, 0.3, 0.15, 0.05])
+    prop_classes = rng.choice(
+        ["Single-family", "Multi-family", "Commercial", "Unknown"], n_rows, p=[0.5, 0.3, 0.15, 0.05]
+    )
 
     # Lot/building size
     lot_size = rng.uniform(1000, 20000, n_rows)
@@ -123,30 +144,35 @@ def generate_sample(n_rows: int = 7500, output_dir: Path = Path("data/sample")) 
     h3_res8 = [f"881f1d4{i % 10}09fffff" for i in range(n_rows)]
     h3_res9 = [f"891f1d4{i % 10}09fffff" for i in range(n_rows)]
 
-    df = pd.DataFrame({
-        "property_id": property_ids,
-        "address": [f"{rng.integers(100, 9999)} N SYNTHETIC ST UNIT {i % 100 + 1}" for i in range(n_rows)],
-        "zip_code": zip_codes,
-        "ward": wards,
-        "latitude": lats,
-        "longitude": lons,
-        "year_built": year_built,
-        "property_class": prop_classes,
-        "lot_size_sqft": lot_size,
-        "building_sqft": building_sqft,
-        "stories": stories,
-        "has_basement": has_basement,
-        "h3_index_res8": h3_res8,
-        "h3_index_res9": h3_res9,
-        "dist_to_nearest_hydrant_m": dist_hydrant,
-        "dist_to_nearest_known_lead_m": dist_lead,
-        "neighbor_lead_rate_h3res8": neighbor_lead_rate,
-        "knn10_lead_rate": knn10_lead_rate,
-        "census_tract": census_tracts,
-        "service_line_material": materials_arr,
-        "material_source": sources,
-        "last_updated": datetime.now(timezone.utc).replace(tzinfo=None),
-    })
+    df = pd.DataFrame(
+        {
+            "property_id": property_ids,
+            "address": [
+                f"{rng.integers(100, 9999)} N SYNTHETIC ST UNIT {i % 100 + 1}"
+                for i in range(n_rows)
+            ],
+            "zip_code": zip_codes,
+            "ward": wards,
+            "latitude": lats,
+            "longitude": lons,
+            "year_built": year_built,
+            "property_class": prop_classes,
+            "lot_size_sqft": lot_size,
+            "building_sqft": building_sqft,
+            "stories": stories,
+            "has_basement": has_basement,
+            "h3_index_res8": h3_res8,
+            "h3_index_res9": h3_res9,
+            "dist_to_nearest_hydrant_m": dist_hydrant,
+            "dist_to_nearest_known_lead_m": dist_lead,
+            "neighbor_lead_rate_h3res8": neighbor_lead_rate,
+            "knn10_lead_rate": knn10_lead_rate,
+            "census_tract": census_tracts,
+            "service_line_material": materials_arr,
+            "material_source": sources,
+            "last_updated": datetime.now(UTC).replace(tzinfo=None),
+        }
+    )
 
     # Stats
     n_labeled = df["service_line_material"].notna().sum()
@@ -157,9 +183,9 @@ def generate_sample(n_rows: int = 7500, output_dir: Path = Path("data/sample")) 
     n_missing_year = df["year_built"].isna().sum()
 
     print(f"Generated {n_rows} synthetic properties:")
-    print(f"  Labeled: {n_labeled} ({n_labeled/n_rows:.1%})")
+    print(f"  Labeled: {n_labeled} ({n_labeled / n_rows:.1%})")
     print(f"  Lead: {n_lead} | Copper: {n_copper} | Galvanized: {n_galv} | Unknown: {n_unknown}")
-    print(f"  Missing year_built: {n_missing_year} ({n_missing_year/n_rows:.1%})")
+    print(f"  Missing year_built: {n_missing_year} ({n_missing_year / n_rows:.1%})")
 
     out_path = output_dir / "sample_properties.parquet"
     df.to_parquet(out_path, index=False)

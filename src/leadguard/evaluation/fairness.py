@@ -20,7 +20,6 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -31,13 +30,15 @@ from leadguard.utils.seed import SEED
 logger = logging.getLogger(__name__)
 
 # Forbidden columns — enforced by test_no_demographic_leakage
-FORBIDDEN_IN_FEATURES = frozenset([
-    "income_quartile",
-    "median_household_income",
-    "race",
-    "ethnicity",
-    "pct_nonwhite",
-])
+FORBIDDEN_IN_FEATURES = frozenset(
+    [
+        "income_quartile",
+        "median_household_income",
+        "race",
+        "ethnicity",
+        "pct_nonwhite",
+    ]
+)
 
 
 def _quartile_from_income(income: pd.Series) -> pd.Series:
@@ -82,7 +83,8 @@ def build_fairness_reference(
 
     if sample_mode or not acs_path.exists():
         logger.warning(
-            "ACS data not found at %s — generating synthetic fairness reference for sample mode", acs_path
+            "ACS data not found at %s — generating synthetic fairness reference for sample mode",
+            acs_path,
         )
         rng = np.random.default_rng(SEED)
         n_tracts = 200
@@ -98,7 +100,9 @@ def build_fairness_reference(
         # B19013_001E = median household income estimate
         income_col = "B19013_001E"
         if income_col not in df.columns:
-            raise ValueError(f"Expected column {income_col!r} in ACS data; got {df.columns.tolist()}")
+            raise ValueError(
+                f"Expected column {income_col!r} in ACS data; got {df.columns.tolist()}"
+            )
         df[income_col] = pd.to_numeric(df[income_col], errors="coerce")
         df = df[df[income_col] > 0]  # exclude suppressed values (-666666666)
         # Construct census_tract FIPS code
@@ -172,8 +176,8 @@ def compute_equity_boost(
 def run_fairness_audit(
     features_path: Path | str = "data/processed/features.parquet",
     fairness_ref_path: Path | str = "data/fairness_reference.parquet",
-    predictions: Optional[pd.DataFrame] = None,
-    inspections: Optional[pd.DataFrame] = None,
+    predictions: pd.DataFrame | None = None,
+    inspections: pd.DataFrame | None = None,
     output_path: Path | str = "reports/fairness_report.json",
     sample_mode: bool = False,
 ) -> dict:
@@ -191,6 +195,7 @@ def run_fairness_audit(
         Fairness report dictionary.
     """
     import xgboost as xgb  # noqa: PLC0415
+
     from leadguard.models.xgboost_model import XGB_FEATURES  # noqa: PLC0415
 
     features_path = Path(features_path)
@@ -211,18 +216,23 @@ def run_fairness_audit(
             model.load_model(str(model_path))
             X = labeled.reindex(columns=XGB_FEATURES, fill_value=0.0).astype(float).values
             labeled["p_lead_calibrated"] = model.predict_proba(X)[:, 1]
-        predictions = labeled[["property_id", "census_tract", "p_lead_calibrated",
-                                "service_line_material"]].copy()
+        predictions = labeled[
+            ["property_id", "census_tract", "p_lead_calibrated", "service_line_material"]
+        ].copy()
 
     # Join income quartile from fairness reference
-    fairness_ref = pd.read_parquet(fairness_ref_path) if Path(fairness_ref_path).exists() else pd.DataFrame()
+    fairness_ref = (
+        pd.read_parquet(fairness_ref_path) if Path(fairness_ref_path).exists() else pd.DataFrame()
+    )
 
     if fairness_ref.empty:
         logger.warning("No fairness reference available; building synthetic one")
         fairness_ref = build_fairness_reference(sample_mode=True)
 
     preds_with_quartile = predictions.merge(fairness_ref, on="census_tract", how="left")
-    preds_with_quartile["income_quartile"] = preds_with_quartile["income_quartile"].fillna(2).astype(int)
+    preds_with_quartile["income_quartile"] = (
+        preds_with_quartile["income_quartile"].fillna(2).astype(int)
+    )
 
     # FNR by quartile
     y_true = (preds_with_quartile["service_line_material"] == "Lead").astype(int)
@@ -274,7 +284,7 @@ def run_fairness_audit(
     return report
 
 
-if __name__ == "__main__":
+def main():
     import argparse
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -286,3 +296,7 @@ if __name__ == "__main__":
     build_fairness_reference(raw_dir=args.raw_dir, sample_mode=args.sample)
     run_fairness_audit(sample_mode=args.sample)
     print("PHASE 6 PASS")
+
+
+if __name__ == "__main__":
+    main()

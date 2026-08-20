@@ -33,14 +33,16 @@ from leadguard.utils.seed import SEED
 logger = logging.getLogger(__name__)
 
 # Forbidden demographic columns — double-checked at write time
-_FORBIDDEN_COLUMNS = frozenset([
-    "income_quartile",
-    "median_household_income",
-    "race",
-    "ethnicity",
-    "pct_nonwhite",
-    "pct_minority",
-])
+_FORBIDDEN_COLUMNS = frozenset(
+    [
+        "income_quartile",
+        "median_household_income",
+        "race",
+        "ethnicity",
+        "pct_nonwhite",
+        "pct_minority",
+    ]
+)
 
 
 def _impute_numerics(df: pd.DataFrame) -> pd.DataFrame:
@@ -82,9 +84,12 @@ def _load_osm_hydrants(raw_dir: Path) -> pd.DataFrame:
     """
     hydrant_path = raw_dir / "osm_hydrants_chicago.json"
     if not hydrant_path.exists():
-        logger.warning("OSM hydrant file not found at %s; dist_to_nearest_hydrant_m will default", hydrant_path)
+        logger.warning(
+            "OSM hydrant file not found at %s; dist_to_nearest_hydrant_m will default", hydrant_path
+        )
         return pd.DataFrame(columns=["latitude", "longitude"])
     import json
+
     data = json.loads(hydrant_path.read_text())
     elements = data.get("elements", [])
     rows = [{"latitude": e["lat"], "longitude": e["lon"]} for e in elements if "lat" in e]
@@ -142,7 +147,9 @@ def build_spatial_features_for_fold(
         Full DataFrame with spatial-lag columns computed from training data only.
     """
     train_df = df.loc[train_indices]
-    df = compute_neighbor_lead_rate_h3(df, train_df, resolution=8, output_col="neighbor_lead_rate_h3res8")
+    df = compute_neighbor_lead_rate_h3(
+        df, train_df, resolution=8, output_col="neighbor_lead_rate_h3res8"
+    )
     df = compute_knn_lead_rate(df, train_df, k=knn_k, output_col="knn10_lead_rate")
     return df
 
@@ -187,25 +194,33 @@ def build_features(
     train_indices = df.index[train_mask]
     logger.info(
         "Computing spatial-lag features from %d training rows (%d total)",
-        len(train_indices), len(df)
+        len(train_indices),
+        len(df),
     )
     df = build_spatial_features_for_fold(df, train_indices, knn_k=knn_k)
 
     # Enforce no demographic columns
     forbidden_present = _FORBIDDEN_COLUMNS & set(df.columns)
     if forbidden_present:
-        raise ValueError(f"DEMOGRAPHIC LEAKAGE: forbidden columns in feature table: {forbidden_present}")
+        raise ValueError(
+            f"DEMOGRAPHIC LEAKAGE: forbidden columns in feature table: {forbidden_present}"
+        )
 
     # Validate against schema
     logger.info("Validating feature schema (%d rows)", len(df))
     validated = FEATURES_SCHEMA.validate(df, lazy=True)
 
     validated.to_parquet(output_path, index=False)
-    logger.info("Features written to %s (%d rows, %d columns)", output_path, len(validated), len(validated.columns))
+    logger.info(
+        "Features written to %s (%d rows, %d columns)",
+        output_path,
+        len(validated),
+        len(validated.columns),
+    )
     return validated
 
 
-if __name__ == "__main__":
+def main():
     import argparse
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -216,3 +231,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     build_features(input_path=args.input, output_path=args.output, raw_dir=args.raw_dir)
     print("FEATURES DONE")
+
+
+if __name__ == "__main__":
+    main()

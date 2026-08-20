@@ -18,8 +18,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
@@ -30,15 +29,14 @@ from fastapi.responses import JSONResponse
 
 from api.model_loader import ModelState, get_state
 from api.schemas import (
-    ErrorResponse,
     FairnessReportResponse,
     HealthResponse,
     InspectionSubmitRequest,
     InspectionSubmitResponse,
     ModelMetadataResponse,
+    PredictionResult,
     PredictRequest,
     PredictResponse,
-    PredictionResult,
     PriorityQueueItem,
     PriorityQueueResponse,
     SHAPFeature,
@@ -99,7 +97,7 @@ def _model_version(state: ModelState) -> str:
     Returns:
         Version string.
     """
-    return state.metrics.get("model_version", f"xgb-{datetime.now(timezone.utc).strftime('%Y.%m.%d')}")
+    return state.metrics.get("model_version", f"xgb-{datetime.now(UTC).strftime('%Y.%m.%d')}")
 
 
 def _predict_single(
@@ -118,12 +116,13 @@ def _predict_single(
         Prediction dictionary matching PredictionResult schema.
     """
     import shap  # noqa: PLC0415
+
     from leadguard.evaluation.explainability import extract_top_shap_features  # noqa: PLC0415
     from leadguard.evaluation.fairness import compute_equity_boost  # noqa: PLC0415
     from leadguard.models.active_learning import compute_priority_score  # noqa: PLC0415
     from leadguard.models.uncertainty import (  # noqa: PLC0415
-        _uncertainty_from_set_size,
         MATERIALS,
+        _uncertainty_from_set_size,
     )
 
     feature_names = state.feature_names
@@ -187,7 +186,7 @@ def _predict_single(
         "priority_score": round(float(priority), 4),
         "shap_top_features": [SHAPFeature(**f) for f in top_features],
         "model_version": _model_version(state),
-        "predicted_at": datetime.now(timezone.utc),
+        "predicted_at": datetime.now(UTC),
     }
 
 
@@ -315,7 +314,7 @@ async def priority_queue(
 
     from leadguard.evaluation.fairness import compute_equity_boost  # noqa: PLC0415
     from leadguard.models.active_learning import compute_priority_score  # noqa: PLC0415
-    from leadguard.models.uncertainty import _uncertainty_from_set_size, MATERIALS  # noqa: PLC0415
+    from leadguard.models.uncertainty import MATERIALS, _uncertainty_from_set_size  # noqa: PLC0415
 
     feature_names = state.feature_names
     X_all = props.reindex(columns=feature_names, fill_value=0.0).astype(float).values
@@ -350,16 +349,20 @@ async def priority_queue(
         if remaining_budget < cost_per_inspection:
             break
         row = props.iloc[idx]
-        items.append(PriorityQueueItem(
-            rank=rank,
-            property_id=str(row.get("property_id", "")),
-            address=str(row.get("address", "")) or None,
-            priority_score=round(float(priority_all[idx]), 4),
-            p_lead_calibrated=round(float(p_lead_all[idx]), 4),
-            uncertainty_score=round(float(uncertainty_all[idx]), 4),
-            conformal_set=[MATERIALS[int(np.argmax(probas[idx]))]] if int(set_sizes[idx]) == 1 else MATERIALS,
-            estimated_cost_usd=cost_per_inspection,
-        ))
+        items.append(
+            PriorityQueueItem(
+                rank=rank,
+                property_id=str(row.get("property_id", "")),
+                address=str(row.get("address", "")) or None,
+                priority_score=round(float(priority_all[idx]), 4),
+                p_lead_calibrated=round(float(p_lead_all[idx]), 4),
+                uncertainty_score=round(float(uncertainty_all[idx]), 4),
+                conformal_set=[MATERIALS[int(np.argmax(probas[idx]))]]
+                if int(set_sizes[idx]) == 1
+                else MATERIALS,
+                estimated_cost_usd=cost_per_inspection,
+            )
+        )
         remaining_budget -= cost_per_inspection
 
     return PriorityQueueResponse(
@@ -380,15 +383,18 @@ async def submit_inspection(request: InspectionSubmitRequest) -> InspectionSubmi
         if row_mask.any():
             census_tract = props[row_mask].iloc[0].get("census_tract")
 
-    inspection_id = "insp-" + hashlib.sha256(
-        f"{request.property_id}{datetime.now(timezone.utc).isoformat()}".encode()
-    ).hexdigest()[:12]
+    inspection_id = (
+        "insp-"
+        + hashlib.sha256(
+            f"{request.property_id}{datetime.now(UTC).isoformat()}".encode()
+        ).hexdigest()[:12]
+    )
 
     inspection = {
         "inspection_id": inspection_id,
         "property_id": request.property_id,
         "inspected_material": request.inspected_material,
-        "inspected_at": (request.inspected_at or datetime.now(timezone.utc)).isoformat(),
+        "inspected_at": (request.inspected_at or datetime.now(UTC)).isoformat(),
         "source": request.source,
         "cost_usd": request.cost_usd,
         "census_tract": census_tract,
@@ -401,7 +407,7 @@ async def submit_inspection(request: InspectionSubmitRequest) -> InspectionSubmi
         inspection_id=inspection_id,
         property_id=request.property_id,
         inspected_material=request.inspected_material,
-        inspected_at=request.inspected_at or datetime.now(timezone.utc),
+        inspected_at=request.inspected_at or datetime.now(UTC),
         message=f"Inspection recorded. Total inspections this session: {len(_inspection_store)}",
     )
 
@@ -411,12 +417,14 @@ async def fairness_report() -> FairnessReportResponse:
     """Latest fairness audit metrics."""
     report_path = Path("reports/fairness_report.json")
     if not report_path.exists():
-        return _error_503("Fairness report not yet generated. Run Phase 6 (evaluation/fairness.py) first.")  # type: ignore[return-value]
+        return _error_503(
+            "Fairness report not yet generated. Run Phase 6 (evaluation/fairness.py) first."
+        )  # type: ignore[return-value]
 
     report = json.loads(report_path.read_text())
     return FairnessReportResponse(
         **report,
-        generated_at=datetime.fromtimestamp(report_path.stat().st_mtime, tz=timezone.utc),
+        generated_at=datetime.fromtimestamp(report_path.stat().st_mtime, tz=UTC),
     )
 
 

@@ -15,14 +15,14 @@ Usage:
 
 from __future__ import annotations
 
-import io
 import os
 from pathlib import Path
 
+import matplotlib
 import pandas as pd
 import requests
 import streamlit as st
-import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
@@ -117,7 +117,9 @@ with st.sidebar:
 # Main tabs
 # ---------------------------------------------------------------------------
 
-tab1, tab2, tab3, tab4 = st.tabs(["🏠 Priority Queue", "🔍 Explain Prediction", "⚖️ Fairness Report", "📈 Cost Curve"])
+tab1, tab2, tab3, tab4 = st.tabs(
+    ["🏠 Priority Queue", "🔍 Explain Prediction", "⚖️ Fairness Report", "📈 Cost Curve"]
+)
 
 # ---------------------------------------------------------------------------
 # Tab 1: Priority Queue
@@ -125,18 +127,26 @@ tab1, tab2, tab3, tab4 = st.tabs(["🏠 Priority Queue", "🔍 Explain Predictio
 
 with tab1:
     st.header("Inspection Priority Queue")
-    st.markdown("Upload a CSV of property IDs to get a ranked inspection queue, or use the live queue endpoint.")
+    st.markdown(
+        "Upload a CSV of property IDs to get a ranked inspection queue, or use the live queue endpoint."
+    )
 
     col1, col2 = st.columns([1, 2])
 
     with col1:
-        budget = st.number_input("Budget ($)", min_value=1000, max_value=10_000_000, value=100_000, step=10_000)
+        budget = st.number_input(
+            "Budget ($)", min_value=1000, max_value=10_000_000, value=100_000, step=10_000
+        )
         limit = st.number_input("Max properties", min_value=10, max_value=5000, value=500, step=50)
-        cost_per = st.number_input("Cost per inspection ($)", min_value=100, max_value=5000, value=500)
+        cost_per = st.number_input(
+            "Cost per inspection ($)", min_value=100, max_value=5000, value=500
+        )
         load_btn = st.button("🔄 Load Priority Queue", type="primary")
 
     with col2:
-        uploaded = st.file_uploader("Upload CSV (optional: must have 'property_id' column)", type=["csv"])
+        uploaded = st.file_uploader(
+            "Upload CSV (optional: must have 'property_id' column)", type=["csv"]
+        )
 
     if load_btn:
         with st.spinner("Fetching priority queue from API..."):
@@ -157,28 +167,38 @@ with tab1:
                                 "P(Lead)": p["p_lead_calibrated"],
                                 "Uncertainty": p["uncertainty_score"],
                                 "Conformal Set": ", ".join(p["conformal_set"]),
-                                "Top Feature": p["shap_top_features"][0]["feature"] if p["shap_top_features"] else "—",
+                                "Top Feature": p["shap_top_features"][0]["feature"]
+                                if p["shap_top_features"]
+                                else "—",
                             }
                             for p in sorted(preds, key=lambda x: -x["priority_score"])
                         ]
                         st.dataframe(pd.DataFrame(rows), use_container_width=True)
             else:
                 # Live queue mode
-                result = _api_get("/v1/priority-queue", params={"budget_usd": budget, "limit": limit, "cost_per_inspection": cost_per})
+                result = _api_get(
+                    "/v1/priority-queue",
+                    params={"budget_usd": budget, "limit": limit, "cost_per_inspection": cost_per},
+                )
                 if result:
                     items = result.get("items", [])
                     st.metric("Properties within budget", result.get("properties_within_budget", 0))
                     st.metric("Total ranked", result.get("total_properties_ranked", 0))
                     if items:
-                        df_q = pd.DataFrame([{
-                            "Rank": i["rank"],
-                            "Property ID": i["property_id"],
-                            "Address": i.get("address", "—"),
-                            "Priority Score": i["priority_score"],
-                            "P(Lead)": i["p_lead_calibrated"],
-                            "Uncertainty": i["uncertainty_score"],
-                            "Est. Cost ($)": i["estimated_cost_usd"],
-                        } for i in items])
+                        df_q = pd.DataFrame(
+                            [
+                                {
+                                    "Rank": i["rank"],
+                                    "Property ID": i["property_id"],
+                                    "Address": i.get("address", "—"),
+                                    "Priority Score": i["priority_score"],
+                                    "P(Lead)": i["p_lead_calibrated"],
+                                    "Uncertainty": i["uncertainty_score"],
+                                    "Est. Cost ($)": i["estimated_cost_usd"],
+                                }
+                                for i in items
+                            ]
+                        )
                         st.dataframe(df_q, use_container_width=True)
 
 # ---------------------------------------------------------------------------
@@ -198,7 +218,9 @@ with tab2:
                 col2.metric("Uncertainty", f"{result['uncertainty_score']:.3f}")
                 col3.metric("Priority Score", f"{result['priority_score']:.3f}")
 
-                st.info(f"**Conformal Set:** {', '.join(result['conformal_set'])} (at {result['confidence_level']*100:.0f}% confidence)")
+                st.info(
+                    f"**Conformal Set:** {', '.join(result['conformal_set'])} (at {result['confidence_level'] * 100:.0f}% confidence)"
+                )
 
                 st.subheader("Top SHAP Feature Contributions")
                 feats = result.get("shap_top_features", [])
@@ -235,11 +257,16 @@ with tab3:
         st.subheader("False Negative Rate by Income Quartile")
         fnr = report.get("fnr_by_quartile", {})
         if fnr:
-            df_fnr = pd.DataFrame([
-                {"Income Quartile": f"Q{k} ({'Lowest' if k=='1' else 'Highest' if k=='4' else 'Middle'})", "FNR": round(v * 100, 1)}
-                for k, v in sorted(fnr.items())
-                if not isinstance(v, float) or not __import__("math").isnan(v)
-            ])
+            df_fnr = pd.DataFrame(
+                [
+                    {
+                        "Income Quartile": f"Q{k} ({'Lowest' if k == '1' else 'Highest' if k == '4' else 'Middle'})",
+                        "FNR": round(v * 100, 1),
+                    }
+                    for k, v in sorted(fnr.items())
+                    if not isinstance(v, float) or not __import__("math").isnan(v)
+                ]
+            )
             st.bar_chart(df_fnr.set_index("Income Quartile"))
 
         if report.get("disparity_flagged"):
@@ -249,7 +276,9 @@ with tab3:
                 "This does not block model use but must be reported."
             )
         else:
-            st.success("✅ FNR disparity within 5 percentage point threshold across all income quartiles.")
+            st.success(
+                "✅ FNR disparity within 5 percentage point threshold across all income quartiles."
+            )
 
         with st.expander("Equity Boost Sample (first 10 tracts)"):
             eq_sample = report.get("equity_boost_sample", {})
@@ -261,17 +290,24 @@ with tab3:
 
 with tab4:
     st.header("Active Learning Cost Curve")
-    st.markdown("Shows PR-AUC vs. cumulative inspections for uncertainty-driven vs. random sampling strategies.")
+    st.markdown(
+        "Shows PR-AUC vs. cumulative inspections for uncertainty-driven vs. random sampling strategies."
+    )
 
     curve_path = Path("reports/active_learning_curve.csv")
     if curve_path.exists():
         df_curve = pd.read_csv(curve_path)
         if not df_curve.empty:
             fig, ax = plt.subplots(figsize=(10, 5))
-            for strategy, color, label in [("uncertainty", "#d73027", "Uncertainty-driven (LeadGuard)"), ("random", "#4575b4", "Random baseline")]:
+            for strategy, color, label in [
+                ("uncertainty", "#d73027", "Uncertainty-driven (LeadGuard)"),
+                ("random", "#4575b4", "Random baseline"),
+            ]:
                 sub = df_curve[df_curve["strategy"] == strategy].dropna(subset=["pr_auc"])
                 if not sub.empty:
-                    ax.plot(sub["cumulative_inspections"], sub["pr_auc"], "o-", color=color, label=label)
+                    ax.plot(
+                        sub["cumulative_inspections"], sub["pr_auc"], "o-", color=color, label=label
+                    )
             ax.set_xlabel("Cumulative Inspections")
             ax.set_ylabel("PR-AUC")
             ax.set_title("Active Learning: PR-AUC vs. Cumulative Inspections")
@@ -284,4 +320,6 @@ with tab4:
             with st.expander("Raw data"):
                 st.dataframe(df_curve, use_container_width=True)
     else:
-        st.info("Active learning curve not yet generated. Run Phase 7 first (`python -m leadguard.models.active_learning`).")
+        st.info(
+            "Active learning curve not yet generated. Run Phase 7 first (`python -m leadguard.models.active_learning`)."
+        )

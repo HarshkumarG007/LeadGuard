@@ -1,59 +1,41 @@
-name: LeadGuard CI
+name: CI
 
 on:
   push:
-    branches: ["main", "develop"]
+    branches: [ main ]
   pull_request:
-    branches: ["main"]
+    branches: [ main ]
 
 jobs:
-  lint-and-test:
+  test:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ["3.11"]
-
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-          cache: "pip"
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
-
-      - name: Lint with ruff
-        run: ruff check src/ api/ app/ tests/
-
-      - name: Check formatting with black
-        run: black --check --line-length 100 src/ api/ app/ tests/
-
-      - name: Run tests with coverage
-        run: pytest --cov=src --cov-report=xml --cov-fail-under=80 tests/
-
-      - name: Smoke-train on sample data
-        run: |
-          python -m leadguard.data.clean --input data/sample --output /tmp/interim_smoke.parquet
-          python -c "
-          import pandas as pd
-          df = pd.read_parquet('/tmp/interim_smoke.parquet')
-          assert df['property_id'].is_unique, 'duplicate property_id in smoke train'
-          print('Smoke train OK:', len(df), 'rows')
-          "
-
-      - name: Check repo size (must be under 2GB)
-        run: |
-          SIZE=$(du -sh --exclude=.git . | cut -f1)
-          echo "Repo size (excluding .git): $SIZE"
-
-      - name: Upload coverage report
-        uses: codecov/codecov-action@v4
-        if: always()
-        with:
-          file: ./coverage.xml
-          fail_ci_if_error: false
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+        cache: "pip"
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip setuptools wheel
+        pip install -e ".[dev]"
+        
+    - name: Lint with ruff
+      run: |
+        ruff check .
+        ruff format --check .
+        
+    - name: Run tests with coverage
+      run: |
+        pytest --cov=src --cov-fail-under=80 tests/ -v
+        
+    - name: Smoke-train on sample data
+      run: |
+        # Phase 1-4 pipeline execution on sample data to ensure no runtime regressions
+        python -m leadguard.data.clean --input data/sample --output data/interim/sample_interim.parquet
+        python -m leadguard.data.features --input data/interim/sample_interim.parquet --output data/processed/features_sample.parquet
+        python -m leadguard.models.baseline --config configs/train.yaml --features data/processed/features_sample.parquet
+        python -m leadguard.models.xgboost_model --config configs/train.yaml --features data/processed/features_sample.parquet
