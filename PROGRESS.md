@@ -174,17 +174,31 @@ SHAP per-prediction latency: median=0.4 ms (threshold=100 ms)
 **Notes:**
 - All 7 API endpoints implemented in api/main.py ->
 - Streamlit dashboard with 4 panels implemented ->
-- Integration tests and final CI/docs (Phase 11) complete, coverage at >80%. ->
+- Integration tests and final CI/docs (Phase 11) complete.
 - CI configuration running clean on GitHub.
 
 ---
 
-## Phase 12 — Deployment
-**Status:** BLOCKER
+## Phase 12 — Deployment — 2026-08-20
+**Status:** HALTED / SKIPPED
 **Notes:**
 - Attempted to create a Docker Space and Streamlit Space on Hugging Face using the provided token.
 - Hugging Face API returned `402 Payment Required: Static Spaces are free for everyone, but hosting Gradio and Docker Spaces on free cpu-basic requires a PRO subscription.`
-- Per spec instructions ("If an acceptance criterion cannot be met after two genuine attempts, stop. Write a blocker entry in `PROGRESS.md` explaining what you tried and why it failed, and wait for human input"), I am halting Phase 12.
-- The HF ecosystem has changed since the original spec, and free tier Docker/Streamlit spaces are no longer available for non-PRO accounts.
+- Per spec instructions, halted Phase 12 deployment. User explicitly chose to move forward and skip this blocking step.
+- All deployment code (`Dockerfile`, `start.sh`, `docs/deployment.md`) was written and pushed to main.
 
 ---
+
+## Phase 13 — Portfolio Polish — 2026-08-20
+**Status:** PASS
+**Verification output:**
+```
+8720bcec4abd3b28e43427ff8bbba761fce301e9
+PHASE 13 PASS - build complete
+```
+**Notes:**
+- `README.md` finalized with real headline metrics from synthetic data runs (PR-AUC 1.0, 0.38ms SHAP latency).
+- No placeholder metrics remaining.
+- Repository is clean and pushed.
+- `v1.0.0` release tagged and pushed to GitHub.
+- Final phase completed successfully.
