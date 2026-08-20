@@ -1,0 +1,64 @@
+# Feature engineering configuration
+
+# --- H3 spatial indexing ---
+h3_resolution_coarse: 8   # ~0.7 km² cells — used for neighbor_lead_rate
+h3_resolution_fine: 9     # ~0.1 km² cells — used for finer spatial aggregation
+
+# --- KNN spatial lag ---
+knn_k: 10   # number of nearest neighbors for knn10_lead_rate
+
+# --- Distance features ---
+# Distance-to-nearest-hydrant and distance-to-nearest-known-lead computed from OSM
+
+# --- Categorical features ---
+categorical_features:
+  - zip_code
+  - ward
+  - property_class
+  - h3_index_res8
+  - h3_index_res9
+
+# --- Numeric features ---
+numeric_features:
+  - year_built
+  - lot_size_sqft
+  - building_sqft
+  - stories
+  - dist_to_nearest_hydrant_m
+  - dist_to_nearest_known_lead_m
+  - neighbor_lead_rate_h3res8
+  - knn10_lead_rate
+
+# --- Boolean features ---
+bool_features:
+  - has_basement
+
+# --- Target column ---
+target_column: service_line_material
+target_positive_class: Lead
+
+# --- Leakage-sensitive features (must ONLY be computed from training partition) ---
+# These MUST be re-derived inside each CV fold or holdout split.
+leakage_sensitive:
+  - neighbor_lead_rate_h3res8
+  - knn10_lead_rate
+
+# --- Columns explicitly FORBIDDEN in the feature matrix ---
+# Any column derived from census / demographic data must never appear here.
+forbidden_in_features:
+  - income_quartile
+  - median_household_income
+  - race
+  - ethnicity
+  - pct_nonwhite
+  # census_tract is ALLOWED as a join key but must not be passed to the model:
+  - census_tract_as_feature   # sentinel name; actual exclusion tested in test_no_demographic_leakage
+
+# --- Missing value strategy ---
+imputation:
+  year_built: median          # ~5-10% missing
+  lot_size_sqft: median
+  building_sqft: median
+  stories: mode
+  has_basement: false
+  property_class: "Unknown"

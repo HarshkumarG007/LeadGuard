@@ -1,0 +1,30 @@
+{
+  "pr_auc_geo": 1.0,
+  "pr_auc_random": 1.0,
+  "best_optuna_params": {
+    "max_depth": 5,
+    "learning_rate": 0.2536999076681772,
+    "subsample": 0.892797576724562,
+    "colsample_bytree": 0.8394633936788146,
+    "min_child_weight": 2
+  },
+  "scale_pos_weight": 1.9478048780487804,
+  "features": [
+    "year_built",
+    "lot_size_sqft",
+    "building_sqft",
+    "stories",
+    "has_basement",
+    "dist_to_nearest_hydrant_m",
+    "dist_to_nearest_known_lead_m",
+    "neighbor_lead_rate_h3res8",
+    "knn10_lead_rate"
+  ],
+  "leakage_check_passed": true,
+  "roc_auc_geo": 1.0,
+  "f2_geo": 1.0,
+  "brier_score_geo": 0.1414957344532013,
+  "roc_auc_random": 1.0,
+  "f2_random": 1.0,
+  "brier_score_random": 0.14151227474212646
+}

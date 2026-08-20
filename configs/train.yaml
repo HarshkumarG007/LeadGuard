@@ -1,0 +1,54 @@
+# Training configuration
+# All hyperparameters and training settings — no magic numbers in source code.
+
+# --- Data splits ---
+train_ratio: 0.70        # proportion used for training
+calibration_ratio: 0.10  # proportion used for conformal calibration (held out from training)
+test_ratio: 0.20         # proportion used for final evaluation
+# Note: geographic holdout uses entire wards excluded from training (see evaluation/metrics.py)
+geographic_holdout_wards: [1, 2, 3]  # wards withheld for geo holdout; override per-run
+
+# --- Random seed ---
+seed: 42
+
+# --- XGBoost hyperparameters (Architecture §7.2 defaults) ---
+xgboost:
+  max_depth: 6
+  learning_rate: 0.05
+  n_estimators: 500
+  early_stopping_rounds: 30
+  subsample: 0.8
+  colsample_bytree: 0.8
+  eval_metric: "aucpr"
+  tree_method: "hist"    # CPU-native
+  device: "cpu"
+  # scale_pos_weight: computed at runtime from class ratio
+  # monotone_constraints: set at runtime {"year_built": 1}
+
+# --- Optuna hyperparameter search ---
+optuna:
+  n_trials: 20           # 100 on full dataset; 20 on sample for speed
+  timeout_seconds: 3600  # 60-minute wall-clock budget
+  search_space:
+    max_depth: [3, 8]
+    learning_rate: [0.01, 0.3]
+    subsample: [0.6, 1.0]
+    colsample_bytree: [0.6, 1.0]
+    min_child_weight: [1, 10]
+
+# --- Baseline models ---
+baseline:
+  logistic_regression:
+    C: 1.0
+    penalty: "l2"
+    max_iter: 1000
+    solver: "lbfgs"
+  random_forest:
+    n_estimators: 300
+    max_depth: null
+    n_jobs: -1
+
+# --- Success gate (Architecture §7.6) ---
+success_gate:
+  min_relative_pr_auc_improvement: 0.10   # XGBoost must beat RF by >10% relative
+  max_split_gap: 0.15                      # random-split vs geo-split gap must be <15% relative

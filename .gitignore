@@ -1,0 +1,61 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.venv/
+venv/
+env/
+
+# Data — raw and interim never committed; sample/ IS committed
+data/raw/
+data/interim/
+data/processed/
+
+# Model artifacts — only demo artifact committed
+models/baseline/*.pkl
+models/xgboost/model.json
+models/xgboost/conformal_global.pkl
+models/xgboost/conformal_by_quartile.pkl
+
+# MLflow / experiment tracking
+mlruns/
+mlflow.db
+
+# Env / secrets
+.env
+!.env.example
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# Coverage
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Docs build
+docs/_build/
+
+# Temp / scratch
+tmp/
+*.tmp
+
+# Git secrets
+.gitsecrets

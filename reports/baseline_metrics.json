@@ -1,0 +1,32 @@
+{
+  "heuristic": {
+    "pr_auc_random": 0.5451872196661215,
+    "pr_auc_geo": 0.5632432977222335,
+    "roc_auc_random": 0.7528008340893396,
+    "f2_random": 0.718353044240035,
+    "brier_score_random": 0.24648985959438377,
+    "roc_auc_geo": 0.752164502164502,
+    "f2_geo": 0.7369942196531792,
+    "brier_score_geo": 0.2534435261707989
+  },
+  "logistic_regression": {
+    "pr_auc_random": 0.9997591892298451,
+    "pr_auc_geo": 1.0,
+    "roc_auc_random": 0.9998808443800522,
+    "f2_random": 0.9904805077062556,
+    "brier_score_random": 0.010830865727406592,
+    "roc_auc_geo": 1.0,
+    "f2_geo": 0.9924812030075187,
+    "brier_score_geo": 0.009082755820127072
+  },
+  "random_forest": {
+    "pr_auc_random": 1.0,
+    "pr_auc_geo": 1.0,
+    "roc_auc_random": 1.0,
+    "f2_random": 1.0,
+    "brier_score_random": 0.00010731495926503733,
+    "roc_auc_geo": 1.0,
+    "f2_geo": 1.0,
+    "brier_score_geo": 6.394245485154578e-05
+  }
+}

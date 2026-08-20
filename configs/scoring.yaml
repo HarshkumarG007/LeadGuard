@@ -1,0 +1,36 @@
+# Priority scoring configuration (Architecture §7.4)
+# priority_score(p) = λ1·p_lead_calibrated + λ2·uncertainty_score + λ3·equity_boost
+# Constraint: λ1 + λ2 + λ3 = 1.0
+
+lambda1: 0.60   # weight on calibrated lead probability
+lambda2: 0.25   # weight on uncertainty score
+lambda3: 0.15   # weight on equity boost
+
+# Conformal prediction confidence level (Architecture §7.3)
+# miscoverage α = 1 - confidence_level = 0.10
+confidence_level: 0.90
+
+# --- Budget defaults for priority queue endpoint ---
+budget:
+  default_budget_usd: 100000.0     # $100K default
+  default_inspection_cost_usd: 500 # rough average per physical inspection
+  scenarios:
+    - budget_usd: 100000
+    - budget_usd: 500000
+    - budget_usd: 1000000
+
+# --- Active learning simulation (Architecture §7.5) ---
+active_learning:
+  initial_labeled_fraction: 0.10   # start with 10% labeled
+  batch_size: 500                   # inspections per round
+  n_rounds: 10                      # simulation rounds
+  retrain_threshold: 500            # new labels before retraining trigger
+  strategies:
+    - uncertainty
+    - random
+
+# --- Equity boost clip bounds (Architecture §7.4) ---
+equity_boost:
+  epsilon: 1.0e-6   # denominator floor in target_share computation
+  clip_min: 0.0
+  clip_max: 1.0
