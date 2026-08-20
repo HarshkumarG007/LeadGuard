@@ -23,15 +23,37 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import yaml
-from scipy.stats import pearsonr
 from sklearn.calibration import CalibratedClassifierCV
 
 from leadguard.utils.seed import SEED
 
 logger = logging.getLogger(__name__)
 
-MATERIALS = ["Copper", "Galvanized", "Lead"]
+MATERIALS = ["NotLead", "Lead"]
 N_MATERIALS = len(MATERIALS)
+
+
+def compute_predictive_entropy(proba: np.ndarray) -> np.ndarray:
+    """Compute normalized predictive entropy from binary probabilities.
+
+    Formula: 1 - |2p - 1|, bounded in [0, 1].
+    p=0.5 -> 1.0 (highly uncertain)
+    p=1.0 or 0.0 -> 0.0 (highly certain)
+
+    Args:
+        proba: Array of shape (n, 2) with class probabilities, or shape (n,) with P(Lead).
+
+    Returns:
+        Array of uncertainty scores in [0, 1].
+    """
+    # Extract P(Lead) if it's a 2D array
+    if proba.ndim == 2:
+        p = proba[:, 1]
+    else:
+        p = proba
+        
+    p = np.clip(p, 0.0, 1.0)
+    return 1.0 - np.abs(2.0 * p - 1.0)
 
 
 def _uncertainty_from_set_size(set_size: np.ndarray, k: int = N_MATERIALS) -> np.ndarray:
@@ -62,7 +84,20 @@ def _platt_calibrate(model: object, X_cal: np.ndarray, y_cal: np.ndarray) -> Cal
     Returns:
         Calibrated classifier.
     """
-    cal = CalibratedClassifierCV(estimator=model, method="sigmoid", cv="prefit")
+    from sklearn.utils.fixes import parse_version
+    import sklearn
+    
+    # Handle sklearn version differences for prefit calibration API
+    if parse_version(sklearn.__version__) >= parse_version("1.6"):
+        from sklearn.calibration import FrozenEstimator
+        cal = CalibratedClassifierCV(estimator=FrozenEstimator(model), method="sigmoid", cv="prefit")
+    else:
+        cal = CalibratedClassifierCV(estimator=model, method="sigmoid", cv="prefit")
+    
+    # In sklearn 1.9, cv='prefit' is completely removed and we must use cv=None with FrozenEstimator
+    if parse_version(sklearn.__version__) >= parse_version("1.9"):
+        from sklearn.calibration import FrozenEstimator
+        cal = CalibratedClassifierCV(estimator=FrozenEstimator(model), method="sigmoid", cv=None)
     cal.fit(X_cal, y_cal)
     return cal
 
@@ -113,6 +148,7 @@ class SplitConformalPredictor:
             raise RuntimeError("Call calibrate() before predict_set()")
         sets = []
         for row in proba:
+            # row is [P(NotLead), P(Lead)]
             pred_set = [MATERIALS[i] for i, p in enumerate(row) if (1 - p) <= self.threshold_]
             if not pred_set:
                 pred_set = [MATERIALS[int(np.argmax(row))]]
@@ -174,39 +210,6 @@ class MondriancConformalPredictor:
         return sets
 
 
-def _ensemble_disagreement(
-    model: object,
-    X: np.ndarray,
-    n_seeds: int = 5,
-    features: list[str] | None = None,
-) -> np.ndarray:
-    """Estimate uncertainty via ensemble disagreement across random seeds.
-
-    Trains lightweight copies of the base model with different seeds and
-    returns the standard deviation of P(Lead) across seeds as a proxy for
-    epistemic uncertainty.
-
-    Args:
-        model: Fitted XGBoost model (used only for its hyperparameters).
-        X: Feature matrix to predict on.
-        n_seeds: Number of ensemble members.
-        features: Feature names (for type annotation only).
-
-    Returns:
-        Array of per-row std deviation of P(Lead) across seeds.
-    """
-
-    # Simpler approach: bootstrap prediction from the real model with jittered features
-    model_xgb = model
-    ensemble_probas = []
-    for seed in range(n_seeds):
-        rng = np.random.default_rng(seed + 100)
-        noise = rng.normal(0, 0.01, X.shape)
-        p = model_xgb.predict_proba(X + noise)[:, 1]
-        ensemble_probas.append(p)
-    return np.array(ensemble_probas).std(axis=0)
-
-
 def calibrate_uncertainty(
     model_dir: Path | str = "models/xgboost",
     features_path: Path | str = "data/processed/features.parquet",
@@ -257,7 +260,7 @@ def calibrate_uncertainty(
     from leadguard.models.xgboost_model import XGB_FEATURES  # noqa: PLC0415
 
     # Use a held-out calibration split (never used in training or test)
-    train_geo, test_geo = geographic_split(labeled)
+    train_geo, cal_geo, test_geo = geographic_split(labeled)
     # Calibration set: 10% from training partition
     cal_size = max(10, int(len(train_geo) * 0.10))
     rng = np.random.default_rng(SEED)
@@ -276,7 +279,7 @@ def calibrate_uncertainty(
     proba_test = model.predict_proba(X_test)
 
     # For binary classifier (Lead vs. not-Lead), wrap into 3-class structure
-    # Use 1 - P(Lead) as nonconformity score for the true class
+    # Use 1 - P(y_true) as nonconformity score for the true class
     def _nonconformity(proba: np.ndarray, y_true: np.ndarray) -> np.ndarray:
         """Compute nonconformity scores: 1 - P(true class)."""
         if proba.ndim == 1 or proba.shape[1] == 1:
@@ -334,33 +337,10 @@ def calibrate_uncertainty(
     with (model_dir / "conformal_by_quartile.pkl").open("wb") as f:
         pickle.dump(mondrian_cp, f)
 
-    # Ensemble disagreement cross-check
-    ensemble_std = _ensemble_disagreement(model, X_test)
-    set_sizes = np.array(
-        [
-            len(s)
-            for s in global_cp.predict_set(
-                proba_test if proba_test.ndim > 1 else proba_test.reshape(-1, 1)
-            )
-        ]
-    )
-    uncertainty_scores = _uncertainty_from_set_size(set_sizes)
-
-    corr, _ = pearsonr(uncertainty_scores, ensemble_std)
-    logger.info(
-        "Uncertainty vs. ensemble disagreement Pearson correlation: %.3f (threshold: 0.6)", corr
-    )
-    if corr < 0.60:
-        logger.error(
-            "CALIBRATION BUG: Pearson correlation %.3f < 0.6 — investigate conformal calibration",
-            corr,
-        )
-
     result = {
         "global_coverage": global_coverage,
         "target_coverage": 1 - alpha,
         "quartile_coverage": {str(k): v for k, v in quartile_coverage.items()},
-        "ensemble_disagreement_correlation": float(corr),
         "global_threshold": global_cp.threshold_,
     }
     logger.info("Uncertainty calibration complete: %s", result)

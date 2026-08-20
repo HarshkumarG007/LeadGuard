@@ -32,72 +32,97 @@ logger = logging.getLogger(__name__)
 
 def random_split(
     df: pd.DataFrame,
-    test_fraction: float = 0.20,
+    test_fraction: float = 0.15,
+    cal_fraction: float = 0.15,
     seed: int = SEED,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Random train/test split stratified on the target.
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Random 3-way split (train/cal/test) stratified on the target.
 
     Args:
         df: Full labeled DataFrame.
-        test_fraction: Fraction reserved for testing.
+        test_fraction: Fraction reserved for final testing.
+        cal_fraction: Fraction reserved for calibration.
         seed: Random seed.
 
     Returns:
-        Tuple of (train_df, test_df).
+        Tuple of (train_df, cal_df, test_df).
     """
     from sklearn.model_selection import train_test_split  # noqa: PLC0415
 
     labeled = df[df["service_line_material"].notna()].copy()
     labeled["_is_lead"] = (labeled["service_line_material"] == "Lead").astype(int)
-    train, test = train_test_split(
+    
+    train_cal, test = train_test_split(
         labeled,
         test_size=test_fraction,
         random_state=seed,
         stratify=labeled["_is_lead"],
     )
-    return train.drop(columns=["_is_lead"]), test.drop(columns=["_is_lead"])
+    
+    # Calculate relative fraction for cal from the train_cal remainder
+    rel_cal_fraction = cal_fraction / (1.0 - test_fraction)
+    train, cal = train_test_split(
+        train_cal,
+        test_size=rel_cal_fraction,
+        random_state=seed + 1,
+        stratify=train_cal["_is_lead"],
+    )
+    
+    return train.drop(columns=["_is_lead"]), cal.drop(columns=["_is_lead"]), test.drop(columns=["_is_lead"])
 
 
 def geographic_split(
     df: pd.DataFrame,
-    holdout_wards: list[int] | None = None,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Geographic holdout split: entire wards excluded from training.
-
-    This is the primary evaluation strategy. A larger gap between random-split
-    and geographic-split scores signals spatial leakage (Architecture §7.6).
+    holdout_test_wards: list[int] | None = None,
+    holdout_cal_wards: list[int] | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Geographic 3-way holdout split: entire wards excluded for testing and calibration.
 
     Args:
         df: Full labeled DataFrame.
-        holdout_wards: Ward IDs to hold out. Defaults to wards with enough data.
+        holdout_test_wards: Ward IDs to hold out for testing.
+        holdout_cal_wards: Ward IDs to hold out for calibration.
 
     Returns:
-        Tuple of (train_df, test_df).
+        Tuple of (train_df, cal_df, test_df).
     """
     labeled = df[df["service_line_material"].notna()].copy()
 
-    if holdout_wards is None:
-        # Auto-select holdout wards: pick wards covering ~20% of labeled rows
-        ward_counts = labeled["ward"].value_counts()
+    ward_counts = labeled["ward"].value_counts()
+    
+    if holdout_test_wards is None or holdout_cal_wards is None:
+        # Auto-select holdout wards: pick ~15% for test, ~15% for cal
         total = len(labeled)
-        selected = []
-        cumulative = 0
+        selected_test = []
+        selected_cal = []
+        cum_test = 0
+        cum_cal = 0
+        
         for ward, count in ward_counts.items():
-            if cumulative >= total * 0.20:
-                break
-            selected.append(ward)
-            cumulative += count
-        holdout_wards = selected if selected else [int(ward_counts.index[0])]
+            if cum_test < total * 0.15:
+                selected_test.append(ward)
+                cum_test += count
+            elif cum_cal < total * 0.15:
+                selected_cal.append(ward)
+                cum_cal += count
+                
+        holdout_test_wards = selected_test if selected_test else [int(ward_counts.index[0])]
+        holdout_cal_wards = selected_cal if selected_cal else [int(ward_counts.index[1])]
 
-    train = labeled[~labeled["ward"].isin(holdout_wards)]
-    test = labeled[labeled["ward"].isin(holdout_wards)]
+    test = labeled[labeled["ward"].isin(holdout_test_wards)]
+    cal = labeled[labeled["ward"].isin(holdout_cal_wards)]
+    train = labeled[~labeled["ward"].isin(holdout_test_wards + holdout_cal_wards)]
+    
     logger.info(
-        "Geographic split: wards %s held out — train=%d, test=%d",
-        holdout_wards,
+        "Geographic split: TEST wards %s, CAL wards %s — train=%d, cal=%d, test=%d",
+        holdout_test_wards,
+        holdout_cal_wards,
         len(train),
+        len(cal),
         len(test),
     )
-    return train, test
+    return train, cal, test
+
 
 
 # ---------------------------------------------------------------------------

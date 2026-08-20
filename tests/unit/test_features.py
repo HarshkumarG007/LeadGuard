@@ -14,7 +14,7 @@ import pytest
 
 from leadguard.data.features import (
     _FORBIDDEN_COLUMNS,
-    build_spatial_features_for_fold,
+    build_features,
 )
 from leadguard.utils.geospatial import (
     add_h3_columns,
@@ -98,15 +98,16 @@ class TestSpatialLagLeakage:
             "Spatial lag rates identical regardless of training partition — possible leakage"
         )
 
-    def test_build_spatial_features_for_fold_only_uses_train_index(
+    def test_build_features_uses_reference(
         self, synthetic_df: pd.DataFrame
     ) -> None:
-        """build_spatial_features_for_fold must not use held-out row data."""
+        """build_features must not use held-out row data."""
         df = add_h3_columns(synthetic_df)
         df["dist_to_nearest_hydrant_m"] = 500.0
         df["dist_to_nearest_known_lead_m"] = 1000.0
-        train_idx = df.index[:150]
-        result = build_spatial_features_for_fold(df, train_idx)
+        train_df = df.iloc[:150]
+        test_df = df.iloc[150:]
+        result = build_features(test_df, reference_df=train_df, include_label_dependent=True)
         assert "neighbor_lead_rate_h3res8" in result.columns
         assert "knn10_lead_rate" in result.columns
         assert result["neighbor_lead_rate_h3res8"].between(0, 1).all()

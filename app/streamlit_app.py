@@ -190,7 +190,6 @@ with tab1:
                                 {
                                     "Rank": i["rank"],
                                     "Property ID": i["property_id"],
-                                    "Address": i.get("address", "—"),
                                     "Priority Score": i["priority_score"],
                                     "P(Lead)": i["p_lead_calibrated"],
                                     "Uncertainty": i["uncertainty_score"],

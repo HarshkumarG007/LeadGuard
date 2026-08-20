@@ -127,6 +127,14 @@ class TestPriorityQueueEndpoint:
             assert "budget_usd" in body
             assert "properties_within_budget" in body
 
+    def test_priority_queue_privacy_no_address(self, client: TestClient) -> None:
+        """Architecture §9 / Privacy: priority-queue must NOT return address."""
+        resp = client.get("/v1/priority-queue", params={"limit": 5})
+        if resp.status_code == 200:
+            body = resp.json()
+            for item in body.get("items", []):
+                assert "address" not in item, "Privacy regression: address found in API response"
+
 
 class TestInspectionsEndpoint:
     """POST /v1/inspections"""

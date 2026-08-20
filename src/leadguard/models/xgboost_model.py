@@ -35,6 +35,8 @@ from leadguard.evaluation.metrics import (
     random_split,
     write_metrics,
 )
+from leadguard.data.features import build_features
+from sklearn.calibration import CalibratedClassifierCV
 from leadguard.utils.seed import SEED
 
 logger = logging.getLogger(__name__)
@@ -146,15 +148,24 @@ def train_xgboost(
     labeled = df[df["service_line_material"].isin(["Lead", "Copper", "Galvanized"])].copy()
     logger.info("Loaded %d labeled rows", len(labeled))
 
-    # Geo split
-    geo_holdout_wards = cfg.get("geographic_holdout_wards", None)
-    train_geo, test_geo = geographic_split(labeled, holdout_wards=geo_holdout_wards)
-    # Random split for leakage check
-    train_rand, test_rand = random_split(labeled, seed=SEED)
+    # Geo 3-way split
+    train_geo, cal_geo, test_geo = geographic_split(labeled)
+    
+    # Generate label-dependent spatial features (Leakage Guard!)
+    logger.info("Building label-dependent features for Geo Split")
+    train_geo_f = build_features(train_geo, reference_df=train_geo, include_label_dependent=True)
+    cal_geo_f = build_features(cal_geo, reference_df=train_geo, include_label_dependent=True)
+    test_geo_f = build_features(test_geo, reference_df=train_geo, include_label_dependent=True)
 
-    X_train, y_train = _prep_xy(train_geo, XGB_FEATURES)
-    X_test, y_test = _prep_xy(test_geo, XGB_FEATURES)
-    X_test_rand, y_test_rand = _prep_xy(test_rand, XGB_FEATURES)
+    X_train, y_train = _prep_xy(train_geo_f, XGB_FEATURES)
+    X_cal, y_cal = _prep_xy(cal_geo_f, XGB_FEATURES)
+    X_test, y_test = _prep_xy(test_geo_f, XGB_FEATURES)
+
+    # Random split for leakage gap check
+    train_r, cal_r, test_r = random_split(labeled, seed=SEED)
+    train_r_f = build_features(train_r, reference_df=train_r, include_label_dependent=True)
+    test_r_f = build_features(test_r, reference_df=train_r, include_label_dependent=True)
+    X_test_rand, y_test_rand = _prep_xy(test_r_f, XGB_FEATURES)
 
     # class imbalance weight
     n_neg = (y_train == 0).sum()
@@ -162,13 +173,13 @@ def train_xgboost(
     scale_pos_weight = float(n_neg / n_pos) if n_pos > 0 else 1.0
     logger.info("scale_pos_weight = %.2f (neg=%d, pos=%d)", scale_pos_weight, n_neg, n_pos)
 
-    # Split off a calibration set from train (10%)
-    cal_size = max(1, int(len(X_train) * 0.10))
+    # Split off an early-stopping set from train (10%) to preserve CAL strictly for calibration
+    es_size = max(1, int(len(X_train) * 0.10))
     rng = np.random.default_rng(SEED)
     idx = rng.permutation(len(X_train))
-    cal_idx, train_idx = idx[:cal_size], idx[cal_size:]
-    X_cal, y_cal = X_train[cal_idx], y_train[cal_idx]
-    X_tr, y_tr = X_train[train_idx], y_train[train_idx]
+    es_idx, tr_idx = idx[:es_size], idx[es_size:]
+    X_es, y_es = X_train[es_idx], y_train[es_idx]
+    X_tr, y_tr = X_train[tr_idx], y_train[tr_idx]
 
     # -----------------------------------------------------------------------
     # Optuna hyperparameter search
@@ -191,13 +202,13 @@ def train_xgboost(
         model.fit(
             X_tr,
             y_tr,
-            eval_set=[(X_cal, y_cal)],
+            eval_set=[(X_es, y_es)],
             verbose=False,
         )
         from sklearn.metrics import average_precision_score  # noqa: PLC0415
 
-        proba = model.predict_proba(X_cal)[:, 1]
-        return float(average_precision_score(y_cal, proba))
+        proba = model.predict_proba(X_es)[:, 1]
+        return float(average_precision_score(y_es, proba))
 
     study = optuna.create_study(direction="maximize", sampler=optuna.samplers.TPESampler(seed=SEED))
     study.optimize(objective, n_trials=n_trials, timeout=timeout - (time.time() - start_time))
@@ -205,38 +216,38 @@ def train_xgboost(
     best_params = study.best_params
     logger.info("Best Optuna params: %s  (val PR-AUC=%.4f)", best_params, study.best_value)
 
-    # -----------------------------------------------------------------------
-    # Final model training with best params
-    # -----------------------------------------------------------------------
-    xgb_cfg = cfg.get("xgboost", {})
-    final_model = xgb.XGBClassifier(
-        max_depth=best_params.get("max_depth", xgb_cfg.get("max_depth", 6)),
-        learning_rate=best_params.get("learning_rate", xgb_cfg.get("learning_rate", 0.05)),
-        subsample=best_params.get("subsample", xgb_cfg.get("subsample", 0.8)),
-        colsample_bytree=best_params.get("colsample_bytree", xgb_cfg.get("colsample_bytree", 0.8)),
-        min_child_weight=best_params.get("min_child_weight", 1),
-        n_estimators=xgb_cfg.get("n_estimators", 500),
-        early_stopping_rounds=xgb_cfg.get("early_stopping_rounds", 30),
-        eval_metric="aucpr",
-        tree_method="hist",
-        device="cpu",
-        scale_pos_weight=scale_pos_weight,
-        monotone_constraints=tuple(MONOTONE_CONSTRAINTS[f] for f in XGB_FEATURES),
-        random_state=SEED,
+    # Retrain best model on full TRAIN
+    best_params = _build_xgb_params(study.best_trial, cfg, scale_pos_weight)
+    n_est = best_params.pop("n_estimators")
+    early = best_params.pop("early_stopping_rounds")
+    best_model = xgb.XGBClassifier(
+        **best_params,
+        n_estimators=n_est,
+        early_stopping_rounds=early,
         verbosity=0,
     )
-    final_model.fit(X_tr, y_tr, eval_set=[(X_cal, y_cal)], verbose=False)
+    best_model.fit(
+        X_tr,
+        y_tr,
+        eval_set=[(X_es, y_es)],
+        verbose=False,
+    )
 
-    # Evaluate on geo holdout
-    m_geo = compute_metrics(
-        y_test, final_model.predict_proba(X_test)[:, 1], split_name="xgboost/geo"
-    )
-    m_rand = compute_metrics(
-        y_test_rand, final_model.predict_proba(X_test_rand)[:, 1], split_name="xgboost/random"
-    )
+    # Apply Probability Calibration on CAL
+    logger.info("Fitting CalibratedClassifierCV on CAL set")
+    calibrated_model = CalibratedClassifierCV(estimator=best_model, cv="prefit", method="sigmoid")
+    calibrated_model.fit(X_cal, y_cal)
+
+    # Predict on TEST using calibrated model
+    test_proba = calibrated_model.predict_proba(X_test)[:, 1]
+    metrics_geo = compute_metrics(y_test, test_proba, prefix="test_geo_")
+    
+    # Predict on random TEST (for leakage gap check)
+    test_proba_rand = calibrated_model.predict_proba(X_test_rand)[:, 1]
+    metrics_rand = compute_metrics(y_test_rand, test_proba_rand, prefix="test_rand_")
 
     # Leakage gap check (Architecture §7.6)
-    leakage_ok = check_leakage_gap(m_rand["pr_auc"], m_geo["pr_auc"])
+    leakage_ok = check_leakage_gap(metrics_rand["test_rand_pr_auc"], metrics_geo["test_geo_pr_auc"])
     if not leakage_ok:
         logger.error("LEAKAGE CHECK FAILED — investigate before proceeding to Phase 5")
 
@@ -246,24 +257,27 @@ def train_xgboost(
         baseline = json.loads(baseline_path.read_text())
         rf_geo = baseline.get("random_forest", {}).get("pr_auc_geo", None)
         if rf_geo is not None:
-            improvement = (m_geo["pr_auc"] - rf_geo) / max(rf_geo, 1e-9)
+            improvement = (metrics_geo["test_geo_pr_auc"] - rf_geo) / max(rf_geo, 1e-9)
             logger.info("XGBoost improvement over RF geo: %.1f%% (gate: >10%%)", improvement * 100)
             if improvement <= 0.10:
                 logger.warning("GATE NOT MET: improvement=%.1f%% <= 10%%", improvement * 100)
 
-    # Save model
-    model_path = output_dir / "model.json"
-    final_model.save_model(str(model_path))
+    # Export the CALIBRATED model artifact for serving
+    import pickle
+
+    model_artifact_path = output_dir / "xgb_model.pkl"
+    with open(model_artifact_path, "wb") as f:
+        pickle.dump(calibrated_model, f)
+    logger.info("Saved calibrated XGBoost pipeline to %s", model_artifact_path)
 
     # Save metrics
     result = {
-        "pr_auc_geo": m_geo["pr_auc"],
-        "pr_auc_random": m_rand["pr_auc"],
+        "pr_auc_geo": metrics_geo["test_geo_pr_auc"],
+        "pr_auc_random": metrics_rand["test_rand_pr_auc"],
         "best_optuna_params": best_params,
         "scale_pos_weight": scale_pos_weight,
         "features": XGB_FEATURES,
         "leakage_check_passed": leakage_ok,
-        **{f"{k}_geo": v for k, v in m_geo.items()},
         **{f"{k}_random": v for k, v in m_rand.items()},
     }
     write_metrics(result, output_dir / "metrics.json")

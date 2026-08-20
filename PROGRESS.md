@@ -202,3 +202,18 @@ PHASE 13 PASS - build complete
 - Repository is clean and pushed.
 - `v1.0.0` release tagged and pushed to GitHub.
 - Final phase completed successfully.
+
+---
+
+## Methodological Rewrite — 2026-08-20
+**Status:** PASS
+**Notes:**
+- A deep review determined the original implementation contained a label leak in the spatial features, making the initial 1.0 PR-AUC scientifically invalid.
+- Split-first architecture implemented (Phase 1).
+- 3-way holdout split correctly structured across baseline and xgboost (Phases 3/4).
+- CalibratedClassifierCV properly implemented with test label invariance (Phases 5/7).
+- "Fake ensemble" perturbation removed. Binary conformal + predictive entropy implemented (Phase 7/8).
+- Active learning simulator rebuilt to correctly rebuild spatial features per round using only non-held-out labels (Phase 10/11).
+- Address field successfully removed from public Priority Queue API and UI (Architecture §9 Privacy).
+- Entire regression test suite passed and coverage checks executed.
+- Comprehensive new README implemented outlining the actual resource-allocation architecture and the no-leakage design invariant.

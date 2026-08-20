@@ -34,6 +34,7 @@ from leadguard.evaluation.metrics import (
     random_split,
     write_metrics,
 )
+from leadguard.data.features import build_features
 from leadguard.utils.seed import SEED
 
 logger = logging.getLogger(__name__)
@@ -141,9 +142,16 @@ def train_baselines(
     labeled = df[df["service_line_material"].isin(["Lead", "Copper", "Galvanized"])].copy()
     logger.info("Loaded %d labeled rows from %s", len(labeled), features_path)
 
-    # Splits
-    train_rand, test_rand = random_split(labeled, seed=SEED)
-    train_geo, test_geo = geographic_split(labeled, holdout_wards=geo_holdout_wards)
+    # 3-way Splits
+    train_rand, cal_rand, test_rand = random_split(labeled, seed=SEED)
+    train_geo, cal_geo, test_geo = geographic_split(labeled)
+    
+    # Feature generation
+    train_geo_f = build_features(train_geo, reference_df=train_geo, include_label_dependent=True)
+    test_geo_f = build_features(test_geo, reference_df=train_geo, include_label_dependent=True)
+    
+    train_r_f = build_features(train_rand, reference_df=train_rand, include_label_dependent=True)
+    test_r_f = build_features(test_rand, reference_df=train_rand, include_label_dependent=True)
 
     all_metrics: dict = {}
 
@@ -154,26 +162,26 @@ def train_baselines(
     X_test_rand, y_test_rand = _prep_xy(test_rand, ["year_built"])
     X_test_geo, y_test_geo = _prep_xy(test_geo, ["year_built"])
     m_rand = compute_metrics(
-        y_test_rand, heuristic.predict_proba(X_test_rand)[:, 1], split_name="heuristic/random"
+        y_test_rand, heuristic.predict_proba(X_test_rand)[:, 1], prefix="test_rand_"
     )
     m_geo = compute_metrics(
-        y_test_geo, heuristic.predict_proba(X_test_geo)[:, 1], split_name="heuristic/geo"
+        y_test_geo, heuristic.predict_proba(X_test_geo)[:, 1], prefix="test_geo_"
     )
     all_metrics["heuristic"] = {
-        "pr_auc_random": m_rand["pr_auc"],
-        "pr_auc_geo": m_geo["pr_auc"],
-        **{f"{k}_random": v for k, v in m_rand.items()},
-        **{f"{k}_geo": v for k, v in m_geo.items()},
+        "pr_auc_random": m_rand["test_rand_pr_auc"],
+        "pr_auc_geo": m_geo["test_geo_pr_auc"],
+        **m_rand,
+        **m_geo,
     }
 
     # -----------------------------------------------------------------------
     # Baseline 1 — Logistic regression
     # -----------------------------------------------------------------------
     scaler = StandardScaler()
-    X_train_rand, y_train_rand = _prep_xy(train_rand, FULL_FEATURES)
-    X_test_rand_full, y_test_rand_full = _prep_xy(test_rand, FULL_FEATURES)
-    X_train_geo, y_train_geo = _prep_xy(train_geo, FULL_FEATURES)
-    X_test_geo_full, y_test_geo_full = _prep_xy(test_geo, FULL_FEATURES)
+    X_train_rand, y_train_rand = _prep_xy(train_r_f, FULL_FEATURES)
+    X_test_rand_full, y_test_rand_full = _prep_xy(test_r_f, FULL_FEATURES)
+    X_train_geo, y_train_geo = _prep_xy(train_geo_f, FULL_FEATURES)
+    X_test_geo_full, y_test_geo_full = _prep_xy(test_geo_f, FULL_FEATURES)
 
     lr_cfg = cfg.get("baseline", {}).get("logistic_regression", {})
     lr = LogisticRegression(
@@ -189,7 +197,7 @@ def train_baselines(
     m_rand_lr = compute_metrics(
         y_test_rand_full,
         lr.predict_proba(scaler.transform(X_test_rand_full))[:, 1],
-        split_name="logistic/random",
+        prefix="test_rand_",
     )
 
     # Retrain on geo train split
@@ -202,14 +210,13 @@ def train_baselines(
     m_geo_lr = compute_metrics(
         y_test_geo_full,
         lr_geo.predict_proba(scaler_geo.transform(X_test_geo_full))[:, 1],
-        split_name="logistic/geo",
+        prefix="test_geo_",
     )
-
     all_metrics["logistic_regression"] = {
-        "pr_auc_random": m_rand_lr["pr_auc"],
-        "pr_auc_geo": m_geo_lr["pr_auc"],
-        **{f"{k}_random": v for k, v in m_rand_lr.items()},
-        **{f"{k}_geo": v for k, v in m_geo_lr.items()},
+        "pr_auc_random": m_rand_lr["test_rand_pr_auc"],
+        "pr_auc_geo": m_geo_lr["test_geo_pr_auc"],
+        **m_rand_lr,
+        **m_geo_lr,
     }
 
     # Save LR artifact
@@ -222,38 +229,38 @@ def train_baselines(
     rf_cfg = cfg.get("baseline", {}).get("random_forest", {})
     rf = RandomForestClassifier(
         n_estimators=rf_cfg.get("n_estimators", 300),
-        max_depth=rf_cfg.get("max_depth", None),
+        max_depth=rf_cfg.get("max_depth", 10),
+        min_samples_leaf=rf_cfg.get("min_samples_leaf", 5),
         random_state=SEED,
-        n_jobs=-1,
         class_weight="balanced",
+        n_jobs=-1,
     )
     rf.fit(X_train_rand, y_train_rand)
     m_rand_rf = compute_metrics(
-        y_test_rand_full,
-        rf.predict_proba(X_test_rand_full)[:, 1],
-        split_name="random_forest/random",
+        y_test_rand_full, rf.predict_proba(X_test_rand_full)[:, 1], prefix="test_rand_"
     )
 
     rf_geo = RandomForestClassifier(
-        n_estimators=rf_cfg.get("n_estimators", 300),
+        n_estimators=300,
+        max_depth=10,
+        min_samples_leaf=5,
         random_state=SEED,
-        n_jobs=-1,
         class_weight="balanced",
+        n_jobs=-1,
     )
     rf_geo.fit(X_train_geo, y_train_geo)
     m_geo_rf = compute_metrics(
-        y_test_geo_full, rf_geo.predict_proba(X_test_geo_full)[:, 1], split_name="random_forest/geo"
+        y_test_geo_full, rf_geo.predict_proba(X_test_geo_full)[:, 1], prefix="test_geo_"
     )
-
     all_metrics["random_forest"] = {
-        "pr_auc_random": m_rand_rf["pr_auc"],
-        "pr_auc_geo": m_geo_rf["pr_auc"],
-        **{f"{k}_random": v for k, v in m_rand_rf.items()},
-        **{f"{k}_geo": v for k, v in m_geo_rf.items()},
+        "pr_auc_random": m_rand_rf["test_rand_pr_auc"],
+        "pr_auc_geo": m_geo_rf["test_geo_pr_auc"],
+        **m_rand_rf,
+        **m_geo_rf,
     }
 
     # Leakage check on RF
-    check_leakage_gap(m_rand_rf["pr_auc"], m_geo_rf["pr_auc"])
+    check_leakage_gap(m_rand_rf["test_rand_pr_auc"], m_geo_rf["test_geo_pr_auc"])
 
     # Save RF artifact
     with (output_dir / "random_forest.pkl").open("wb") as f:

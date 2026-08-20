@@ -72,7 +72,6 @@ class PriorityQueueItem(BaseModel):
 
     rank: int
     property_id: str
-    address: str | None = None
     priority_score: float
     p_lead_calibrated: float
     uncertainty_score: float

@@ -44,23 +44,23 @@ def test_full_pipeline_coverage(tmp_path):
         baseline_main()
 
     # 4. XGBoost
-    with patch(
-        "sys.argv", ["xgboost_model.py", "--config", "configs/train.yaml", "--features", features]
-    ):
-        xgboost_main()
+    with patch("sys.argv", ["xgboost_model.py", "--config", "configs/train.yaml", "--features", features]):
+        # patch Optuna to run fast
+        with patch("optuna.study.Study.optimize") as mock_opt:
+            xgboost_main()
 
     # 5. Uncertainty
     with patch("sys.argv", ["uncertainty.py", "--features", features, "--sample"]):
         uncertainty_main()
 
     # 6. Fairness
-    with patch("sys.argv", ["fairness.py", "--sample"]):
+    with patch("sys.argv", ["fairness.py", "--sample", "--features", features]):
         fairness_main()
 
     # 7. Active Learning
-    with patch("sys.argv", ["active_learning.py", "--sample"]):
+    with patch("sys.argv", ["active_learning.py", "--fast", "--features", features]):
         active_learning_main()
 
     # 8. Explainability
-    with patch("sys.argv", ["explainability.py", "--sample"]):
+    with patch("sys.argv", ["explainability.py", "--sample", "--features", features]):
         explainability_main()

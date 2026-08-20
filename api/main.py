@@ -122,7 +122,7 @@ def _predict_single(
     from leadguard.models.active_learning import compute_priority_score  # noqa: PLC0415
     from leadguard.models.uncertainty import (  # noqa: PLC0415
         MATERIALS,
-        _uncertainty_from_set_size,
+        compute_predictive_entropy,
     )
 
     feature_names = state.feature_names
@@ -134,17 +134,13 @@ def _predict_single(
 
     # Conformal set
     if state.conformal_global is not None:
-        score = 1.0 - proba.max()
-        if score <= state.conformal_global.threshold_:
-            conformal_set = [MATERIALS[int(np.argmax(proba))]]
-        else:
-            conformal_set = MATERIALS.copy()
+        conformal_sets = state.conformal_global.predict_set(np.array([proba]))
+        conformal_set = conformal_sets[0]
     else:
-        conformal_set = [MATERIALS[int(np.argmax(proba))]]
+        conformal_set = MATERIALS.copy()
 
     # Uncertainty score
-    set_size = np.array([len(conformal_set)])
-    uncertainty = float(_uncertainty_from_set_size(set_size, k=len(MATERIALS))[0])
+    uncertainty = float(compute_predictive_entropy(np.array([proba]))[0])
 
     # Equity boost
     census_tract = property_row.get("census_tract", None)
@@ -165,6 +161,7 @@ def _predict_single(
         np.array([p_lead]),
         np.array([uncertainty]),
         np.array([equity_boost]),
+        strategy="risk_uncertainty_equity",
     )[0]
 
     # SHAP top features
@@ -314,21 +311,21 @@ async def priority_queue(
 
     from leadguard.evaluation.fairness import compute_equity_boost  # noqa: PLC0415
     from leadguard.models.active_learning import compute_priority_score  # noqa: PLC0415
-    from leadguard.models.uncertainty import MATERIALS, _uncertainty_from_set_size  # noqa: PLC0415
+    from leadguard.models.uncertainty import MATERIALS, compute_predictive_entropy  # noqa: PLC0415
 
     feature_names = state.feature_names
     X_all = props.reindex(columns=feature_names, fill_value=0.0).astype(float).values
     probas = state.model.predict_proba(X_all)
-    p_lead_all = probas[:, -1]
+    p_lead_all = probas[:, 1]
 
     # Uncertainty
+    uncertainty_all = compute_predictive_entropy(probas)
+    
+    # Conformal sets
     if state.conformal_global is not None:
-        scores = 1.0 - probas.max(axis=1)
-        thr = state.conformal_global.threshold_
-        set_sizes = np.where(scores <= thr, 1, len(MATERIALS))
+        conformal_sets = state.conformal_global.predict_set(probas)
     else:
-        set_sizes = np.ones(len(props), dtype=int)
-    uncertainty_all = _uncertainty_from_set_size(set_sizes, k=len(MATERIALS))
+        conformal_sets = [MATERIALS for _ in range(len(props))]
 
     # Equity boost
     pred_df = props[["census_tract"]].copy()
@@ -339,7 +336,9 @@ async def priority_queue(
     boost_series = compute_equity_boost(pred_df, inspections_df)
     equity_all = props["census_tract"].map(boost_series).fillna(0.0).values
 
-    priority_all = compute_priority_score(p_lead_all, uncertainty_all, equity_all)
+    priority_all = compute_priority_score(
+        p_lead_all, uncertainty_all, equity_all, strategy="risk_uncertainty_equity"
+    )
 
     # Sort and apply budget
     sorted_idx = np.argsort(priority_all)[::-1]
@@ -353,13 +352,10 @@ async def priority_queue(
             PriorityQueueItem(
                 rank=rank,
                 property_id=str(row.get("property_id", "")),
-                address=str(row.get("address", "")) or None,
                 priority_score=round(float(priority_all[idx]), 4),
                 p_lead_calibrated=round(float(p_lead_all[idx]), 4),
                 uncertainty_score=round(float(uncertainty_all[idx]), 4),
-                conformal_set=[MATERIALS[int(np.argmax(probas[idx]))]]
-                if int(set_sizes[idx]) == 1
-                else MATERIALS,
+                conformal_set=conformal_sets[idx],
                 estimated_cost_usd=cost_per_inspection,
             )
         )

@@ -226,8 +226,9 @@ def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
     parser = argparse.ArgumentParser(description="Run SHAP explainability pipeline")
     parser.add_argument("--sample", action="store_true")
+    parser.add_argument("--features", default="data/processed/features.parquet")
     args = parser.parse_args()
-    result = run_explainability(sample=args.sample)
+    result = run_explainability(features_path=args.features, sample=args.sample)
     print("PHASE 8 PASS — latency:", result["per_prediction_latency_ms_median"], "ms")
 
 

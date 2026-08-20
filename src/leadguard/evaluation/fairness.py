@@ -291,10 +291,11 @@ def main():
     parser = argparse.ArgumentParser(description="Build fairness reference and run fairness audit")
     parser.add_argument("--raw-dir", default="data/raw")
     parser.add_argument("--sample", action="store_true")
+    parser.add_argument("--features", default="data/processed/features.parquet")
     args = parser.parse_args()
 
     build_fairness_reference(raw_dir=args.raw_dir, sample_mode=args.sample)
-    run_fairness_audit(sample_mode=args.sample)
+    run_fairness_audit(features_path=args.features, sample_mode=args.sample)
     print("PHASE 6 PASS")
 
 
