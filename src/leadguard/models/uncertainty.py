@@ -197,29 +197,8 @@ def _ensemble_disagreement(
     """
     import xgboost as xgb  # noqa: PLC0415
 
-    probas = []
-    for seed in range(n_seeds):
-        m = xgb.XGBClassifier(
-            n_estimators=50,
-            max_depth=4,
-            learning_rate=0.1,
-            subsample=0.8,
-            colsample_bytree=0.8,
-            tree_method="hist",
-            device="cpu",
-            verbosity=0,
-            random_state=seed,
-        )
-        # Use a slightly different bootstrap sample per seed
-        rng = np.random.default_rng(seed)
-        idx = rng.integers(0, len(X), size=len(X))
-        m.fit(X[idx], np.zeros(len(X)))  # dummy labels — we just need diversity in probas
-        # This is just for disagreement estimation; use the real model's proba structure
-        del m
-
     # Simpler approach: bootstrap prediction from the real model with jittered features
     model_xgb = model
-    base_proba = model_xgb.predict_proba(X)[:, 1]
     ensemble_probas = []
     for seed in range(n_seeds):
         rng = np.random.default_rng(seed + 100)

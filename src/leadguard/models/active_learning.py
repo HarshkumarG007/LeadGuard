@@ -129,7 +129,6 @@ def simulate_active_learning(
     df = pd.read_parquet(features_path)
     labeled_mask = df["service_line_material"].isin(["Lead", "Copper", "Galvanized"])
     labeled = df[labeled_mask].copy()
-    unlabeled_pool = df[~labeled_mask].copy()
 
     if len(labeled) == 0:
         logger.error("No labeled data found; cannot run active learning simulation")
@@ -182,7 +181,6 @@ def simulate_active_learning(
             if not test_idx:
                 break
 
-            train_df = labeled.loc[list(currently_labeled_idx)]
             test_df = labeled.loc[test_idx]
 
             X_test = test_df.reindex(columns=XGB_FEATURES, fill_value=0.0).astype(float).values
