@@ -27,6 +27,7 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 
+from leadguard.data.features import build_features
 from leadguard.evaluation.metrics import (
     check_leakage_gap,
     compute_metrics,
@@ -34,7 +35,6 @@ from leadguard.evaluation.metrics import (
     random_split,
     write_metrics,
 )
-from leadguard.data.features import build_features
 from leadguard.utils.seed import SEED
 
 logger = logging.getLogger(__name__)
@@ -130,7 +130,6 @@ def train_baselines(
 
     # Load config
     cfg = yaml.safe_load(Path(config_path).read_text()) if Path(config_path).exists() else {}
-    geo_holdout_wards = cfg.get("geographic_holdout_wards", None)
 
     # Load features
     if sample and not features_path.exists():
@@ -145,11 +144,11 @@ def train_baselines(
     # 3-way Splits
     train_rand, cal_rand, test_rand = random_split(labeled, seed=SEED)
     train_geo, cal_geo, test_geo = geographic_split(labeled)
-    
+
     # Feature generation
     train_geo_f = build_features(train_geo, reference_df=train_geo, include_label_dependent=True)
     test_geo_f = build_features(test_geo, reference_df=train_geo, include_label_dependent=True)
-    
+
     train_r_f = build_features(train_rand, reference_df=train_rand, include_label_dependent=True)
     test_r_f = build_features(test_rand, reference_df=train_rand, include_label_dependent=True)
 

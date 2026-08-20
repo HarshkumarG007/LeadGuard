@@ -23,9 +23,9 @@ def test_random_acquisition():
     np.random.seed(43)
     scores2 = compute_priority_score(p_lead, uncertainty_score, equity_boost, strategy="random")
 
-    assert not np.allclose(
-        scores1, scores2
-    ), "Random strategy is deterministic when it shouldn't be."
+    assert not np.allclose(scores1, scores2), (
+        "Random strategy is deterministic when it shouldn't be."
+    )
     assert not np.allclose(scores1, p_lead), "Random strategy is just returning risk."
 
 
@@ -116,15 +116,12 @@ def test_active_learning_rebuilds_features_after_each_round(tmp_path):
         patch("leadguard.models.active_learning.xgb.XGBClassifier") as mock_xgb,
         patch("leadguard.models.active_learning.pd.read_parquet") as mock_read_parquet,
     ):
-
         # Mock read_parquet to return our df
         mock_read_parquet.return_value = df
 
         # Mock build_features to just return the subset (it returns features df, we just return dummy)
-        mock_build_features.side_effect = (
-            lambda df, reference_df, include_label_dependent: pd.DataFrame(
-                np.random.rand(len(df), 5), index=df.index
-            )
+        mock_build_features.side_effect = lambda df, reference_df, include_label_dependent: (
+            pd.DataFrame(np.random.rand(len(df), 5), index=df.index)
         )
 
         # Mock model

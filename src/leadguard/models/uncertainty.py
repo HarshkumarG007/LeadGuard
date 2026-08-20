@@ -51,7 +51,7 @@ def compute_predictive_entropy(proba: np.ndarray) -> np.ndarray:
         p = proba[:, 1]
     else:
         p = proba
-        
+
     p = np.clip(p, 0.0, 1.0)
     return 1.0 - np.abs(2.0 * p - 1.0)
 
@@ -84,19 +84,23 @@ def _platt_calibrate(model: object, X_cal: np.ndarray, y_cal: np.ndarray) -> Cal
     Returns:
         Calibrated classifier.
     """
-    from sklearn.utils.fixes import parse_version
     import sklearn
-    
+    from sklearn.utils.fixes import parse_version
+
     # Handle sklearn version differences for prefit calibration API
     if parse_version(sklearn.__version__) >= parse_version("1.6"):
         from sklearn.calibration import FrozenEstimator
-        cal = CalibratedClassifierCV(estimator=FrozenEstimator(model), method="sigmoid", cv="prefit")
+
+        cal = CalibratedClassifierCV(
+            estimator=FrozenEstimator(model), method="sigmoid", cv="prefit"
+        )
     else:
         cal = CalibratedClassifierCV(estimator=model, method="sigmoid", cv="prefit")
-    
+
     # In sklearn 1.9, cv='prefit' is completely removed and we must use cv=None with FrozenEstimator
     if parse_version(sklearn.__version__) >= parse_version("1.9"):
         from sklearn.calibration import FrozenEstimator
+
         cal = CalibratedClassifierCV(estimator=FrozenEstimator(model), method="sigmoid", cv=None)
     cal.fit(X_cal, y_cal)
     return cal

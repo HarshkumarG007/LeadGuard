@@ -27,7 +27,9 @@ import yaml
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from sklearn.calibration import CalibratedClassifierCV
 
+from leadguard.data.features import build_features
 from leadguard.evaluation.metrics import (
     check_leakage_gap,
     compute_metrics,
@@ -35,8 +37,6 @@ from leadguard.evaluation.metrics import (
     random_split,
     write_metrics,
 )
-from leadguard.data.features import build_features
-from sklearn.calibration import CalibratedClassifierCV
 from leadguard.utils.seed import SEED
 
 logger = logging.getLogger(__name__)
@@ -150,7 +150,7 @@ def train_xgboost(
 
     # Geo 3-way split
     train_geo, cal_geo, test_geo = geographic_split(labeled)
-    
+
     # Generate label-dependent spatial features (Leakage Guard!)
     logger.info("Building label-dependent features for Geo Split")
     train_geo_f = build_features(train_geo, reference_df=train_geo, include_label_dependent=True)
@@ -162,8 +162,8 @@ def train_xgboost(
     X_test, y_test = _prep_xy(test_geo_f, XGB_FEATURES)
 
     # Random split for leakage gap check
+    # Random split for leakage gap check
     train_r, cal_r, test_r = random_split(labeled, seed=SEED)
-    train_r_f = build_features(train_r, reference_df=train_r, include_label_dependent=True)
     test_r_f = build_features(test_r, reference_df=train_r, include_label_dependent=True)
     X_test_rand, y_test_rand = _prep_xy(test_r_f, XGB_FEATURES)
 
@@ -235,13 +235,34 @@ def train_xgboost(
 
     # Apply Probability Calibration on CAL
     logger.info("Fitting CalibratedClassifierCV on CAL set")
-    calibrated_model = CalibratedClassifierCV(estimator=best_model, cv="prefit", method="sigmoid")
+    import sklearn
+    from sklearn.utils.fixes import parse_version
+
+    # Handle sklearn version differences for prefit calibration API
+    if parse_version(sklearn.__version__) >= parse_version("1.6"):
+        from sklearn.calibration import FrozenEstimator
+
+        calibrated_model = CalibratedClassifierCV(
+            estimator=FrozenEstimator(best_model), method="sigmoid", cv="prefit"
+        )
+    else:
+        calibrated_model = CalibratedClassifierCV(
+            estimator=best_model, method="sigmoid", cv="prefit"
+        )
+
+    # In sklearn 1.9, cv='prefit' is completely removed
+    if parse_version(sklearn.__version__) >= parse_version("1.9"):
+        from sklearn.calibration import FrozenEstimator
+
+        calibrated_model = CalibratedClassifierCV(
+            estimator=FrozenEstimator(best_model), method="sigmoid", cv=None
+        )
     calibrated_model.fit(X_cal, y_cal)
 
     # Predict on TEST using calibrated model
     test_proba = calibrated_model.predict_proba(X_test)[:, 1]
     metrics_geo = compute_metrics(y_test, test_proba, prefix="test_geo_")
-    
+
     # Predict on random TEST (for leakage gap check)
     test_proba_rand = calibrated_model.predict_proba(X_test_rand)[:, 1]
     metrics_rand = compute_metrics(y_test_rand, test_proba_rand, prefix="test_rand_")
@@ -278,14 +299,14 @@ def train_xgboost(
         "scale_pos_weight": scale_pos_weight,
         "features": XGB_FEATURES,
         "leakage_check_passed": leakage_ok,
-        **{f"{k}_random": v for k, v in m_rand.items()},
+        **{f"{k}_random": v for k, v in metrics_rand.items()},
     }
     write_metrics(result, output_dir / "metrics.json")
 
     # Feature importance plot
-    _plot_feature_importance(final_model, XGB_FEATURES, reports_dir / "feature_importance.png")
+    _plot_feature_importance(best_model, XGB_FEATURES, reports_dir / "feature_importance.png")
 
-    logger.info("Phase 4 model saved to %s", model_path)
+    logger.info("Phase 4 model saved to %s", model_artifact_path)
     return result
 
 

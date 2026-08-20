@@ -76,7 +76,7 @@ class TestSplitConformalPredictor:
         cp.calibrate(calibration_scores)
 
         rng = np.random.default_rng(0)
-        proba = rng.dirichlet(np.ones(3), size=20)  # 3-class probabilities
+        proba = rng.dirichlet(np.ones(2), size=20)  # 2-class probabilities
         sets = cp.predict_set(proba)
         assert all(len(s) >= 1 for s in sets)
 
@@ -84,7 +84,7 @@ class TestSplitConformalPredictor:
         """predict_set must raise RuntimeError if calibrate() not called."""
         cp = SplitConformalPredictor(alpha=0.10)
         rng = np.random.default_rng(0)
-        proba = rng.dirichlet(np.ones(3), size=5)
+        proba = rng.dirichlet(np.ones(2), size=5)
         with pytest.raises(RuntimeError, match="calibrate"):
             cp.predict_set(proba)
 

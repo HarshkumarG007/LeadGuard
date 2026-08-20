@@ -5,8 +5,8 @@ and leakage-safe spatial-lag features. Outputs features.parquet
 matching the Property schema (Architecture §6.2).
 
 LEAKAGE GUARD: neighbor_lead_rate, knn_lead_rate, and dist_to_nearest_known_lead
-MUST be computed only using the training partition within each CV fold. 
-This module exposes `build_features(df, reference_df, include_label_dependent=True)` 
+MUST be computed only using the training partition within each CV fold.
+This module exposes `build_features(df, reference_df, include_label_dependent=True)`
 for that purpose.
 
 Usage:
@@ -19,17 +19,14 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
-from leadguard.data.validation import FEATURES_SCHEMA
 from leadguard.utils.geospatial import (
     add_h3_columns,
     compute_dist_to_nearest,
     compute_knn_lead_rate,
     compute_neighbor_lead_rate_h3,
 )
-from leadguard.utils.seed import SEED
 
 logger = logging.getLogger(__name__)
 
@@ -141,11 +138,13 @@ def _build_label_dependent_features(
         DataFrame with spatial-lag columns added.
     """
     df = df.copy()
-    
+
     # Distance to nearest known-lead property in the REFERENCE set
-    known_lead = reference_df[reference_df["service_line_material"] == "Lead"][["latitude", "longitude"]]
+    known_lead = reference_df[reference_df["service_line_material"] == "Lead"][
+        ["latitude", "longitude"]
+    ]
     df = compute_dist_to_nearest(df, known_lead, "dist_to_nearest_known_lead_m", default_m=10000.0)
-    
+
     df = compute_neighbor_lead_rate_h3(
         df, reference_df, resolution=8, output_col="neighbor_lead_rate_h3res8"
     )
@@ -178,6 +177,8 @@ def build_features(
     if include_label_dependent:
         if reference_df is None:
             raise ValueError("reference_df must be provided if include_label_dependent is True")
+        if "h3_index_res8" not in reference_df.columns:
+            reference_df = build_base_features(reference_df, raw_dir=raw_dir)
         df = _build_label_dependent_features(df, reference_df, knn_k=knn_k)
 
     return df
@@ -189,15 +190,15 @@ def build_base_features_parquet(
     raw_dir: Path | str = "data/raw",
 ) -> pd.DataFrame:
     """Build and save ONLY base (non-label) features to parquet.
-    
-    This replaces the old build_features() that saved all features including 
+
+    This replaces the old build_features() that saved all features including
     leaky ones. Now, features.parquet only stores raw/non-label features.
-    
+
     Args:
         input_path: Path to interim parquet.
         output_path: Destination features parquet.
         raw_dir: Raw data directory.
-        
+
     Returns:
         Base features DataFrame.
     """
@@ -242,7 +243,9 @@ def main():
     parser.add_argument("--output", default="data/processed/features.parquet")
     parser.add_argument("--raw-dir", default="data/raw")
     args = parser.parse_args()
-    build_base_features_parquet(input_path=args.input, output_path=args.output, raw_dir=args.raw_dir)
+    build_base_features_parquet(
+        input_path=args.input, output_path=args.output, raw_dir=args.raw_dir
+    )
     print("FEATURES DONE")
 
 

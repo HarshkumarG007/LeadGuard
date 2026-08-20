@@ -51,14 +51,14 @@ def random_split(
 
     labeled = df[df["service_line_material"].notna()].copy()
     labeled["_is_lead"] = (labeled["service_line_material"] == "Lead").astype(int)
-    
+
     train_cal, test = train_test_split(
         labeled,
         test_size=test_fraction,
         random_state=seed,
         stratify=labeled["_is_lead"],
     )
-    
+
     # Calculate relative fraction for cal from the train_cal remainder
     rel_cal_fraction = cal_fraction / (1.0 - test_fraction)
     train, cal = train_test_split(
@@ -67,8 +67,12 @@ def random_split(
         random_state=seed + 1,
         stratify=train_cal["_is_lead"],
     )
-    
-    return train.drop(columns=["_is_lead"]), cal.drop(columns=["_is_lead"]), test.drop(columns=["_is_lead"])
+
+    return (
+        train.drop(columns=["_is_lead"]),
+        cal.drop(columns=["_is_lead"]),
+        test.drop(columns=["_is_lead"]),
+    )
 
 
 def geographic_split(
@@ -89,7 +93,7 @@ def geographic_split(
     labeled = df[df["service_line_material"].notna()].copy()
 
     ward_counts = labeled["ward"].value_counts()
-    
+
     if holdout_test_wards is None or holdout_cal_wards is None:
         # Auto-select holdout wards: pick ~15% for test, ~15% for cal
         total = len(labeled)
@@ -97,7 +101,7 @@ def geographic_split(
         selected_cal = []
         cum_test = 0
         cum_cal = 0
-        
+
         for ward, count in ward_counts.items():
             if cum_test < total * 0.15:
                 selected_test.append(ward)
@@ -105,14 +109,14 @@ def geographic_split(
             elif cum_cal < total * 0.15:
                 selected_cal.append(ward)
                 cum_cal += count
-                
+
         holdout_test_wards = selected_test if selected_test else [int(ward_counts.index[0])]
         holdout_cal_wards = selected_cal if selected_cal else [int(ward_counts.index[1])]
 
     test = labeled[labeled["ward"].isin(holdout_test_wards)]
     cal = labeled[labeled["ward"].isin(holdout_cal_wards)]
     train = labeled[~labeled["ward"].isin(holdout_test_wards + holdout_cal_wards)]
-    
+
     logger.info(
         "Geographic split: TEST wards %s, CAL wards %s — train=%d, cal=%d, test=%d",
         holdout_test_wards,
@@ -122,7 +126,6 @@ def geographic_split(
         len(test),
     )
     return train, cal, test
-
 
 
 # ---------------------------------------------------------------------------

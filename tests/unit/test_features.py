@@ -98,9 +98,7 @@ class TestSpatialLagLeakage:
             "Spatial lag rates identical regardless of training partition — possible leakage"
         )
 
-    def test_build_features_uses_reference(
-        self, synthetic_df: pd.DataFrame
-    ) -> None:
+    def test_build_features_uses_reference(self, synthetic_df: pd.DataFrame) -> None:
         """build_features must not use held-out row data."""
         df = add_h3_columns(synthetic_df)
         df["dist_to_nearest_hydrant_m"] = 500.0

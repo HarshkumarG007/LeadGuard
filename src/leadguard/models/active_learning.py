@@ -14,19 +14,18 @@ Usage:
 from __future__ import annotations
 
 import logging
-import pickle
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import yaml
 import xgboost as xgb
+import yaml
 from sklearn.metrics import average_precision_score
 
-from leadguard.evaluation.fairness import compute_equity_boost
 from leadguard.data.features import build_features
-from leadguard.models.xgboost_model import XGB_FEATURES
+from leadguard.evaluation.fairness import compute_equity_boost
 from leadguard.models.uncertainty import compute_predictive_entropy
+from leadguard.models.xgboost_model import XGB_FEATURES
 from leadguard.utils.seed import SEED
 
 logger = logging.getLogger(__name__)
@@ -103,8 +102,15 @@ def simulate_active_learning(
     all_labeled_idx = labeled.index.tolist()
     rng.shuffle(all_labeled_idx)
     n_init = max(1, int(len(all_labeled_idx) * initial_frac))
-    
-    strategies = ["random", "risk", "uncertainty", "risk_uncertainty", "risk_uncertainty_equity", "oracle"]
+
+    strategies = [
+        "random",
+        "risk",
+        "uncertainty",
+        "risk_uncertainty",
+        "risk_uncertainty_equity",
+        "oracle",
+    ]
     results = []
 
     for strategy in strategies:
@@ -113,18 +119,20 @@ def simulate_active_learning(
         cumulative_cost = 0.0
         cumulative_discoveries = 0
 
-        for round_num in range(0, n_rounds + 1): # 0 is initial eval, 1-N are acquisition
+        for round_num in range(0, n_rounds + 1):  # 0 is initial eval, 1-N are acquisition
             # Define L_i (reference df)
             L_df = labeled.loc[list(currently_labeled_idx)]
-            
+
             # Rebuild spatial features for L_df
             L_df_feats = build_features(L_df, reference_df=L_df, include_label_dependent=True)
             X_train = L_df_feats.reindex(columns=XGB_FEATURES, fill_value=0.0).astype(float).values
             y_train = (L_df_feats["service_line_material"] == "Lead").astype(int).values
-            
+
             # Retrain model
             n_estimators = 50 if fast else 300
-            model = xgb.XGBClassifier(n_estimators=n_estimators, max_depth=6, verbosity=0, random_state=SEED)
+            model = xgb.XGBClassifier(
+                n_estimators=n_estimators, max_depth=6, verbosity=0, random_state=SEED
+            )
             # Add simple class weights
             n_neg = (y_train == 0).sum()
             n_pos = (y_train == 1).sum()
@@ -136,26 +144,35 @@ def simulate_active_learning(
             test_idx = [i for i in all_labeled_idx if i not in currently_labeled_idx]
             if not test_idx:
                 break
-                
+
             test_df = labeled.loc[test_idx]
             test_df_feats = build_features(test_df, reference_df=L_df, include_label_dependent=True)
-            X_test = test_df_feats.reindex(columns=XGB_FEATURES, fill_value=0.0).astype(float).values
+            X_test = (
+                test_df_feats.reindex(columns=XGB_FEATURES, fill_value=0.0).astype(float).values
+            )
             y_test = (test_df_feats["service_line_material"] == "Lead").astype(int).values
 
             proba_test = model.predict_proba(X_test)[:, 1]
-            pr_auc = float(average_precision_score(y_test, proba_test)) if len(np.unique(y_test)) > 1 else float('nan')
+            pr_auc = (
+                float(average_precision_score(y_test, proba_test))
+                if len(np.unique(y_test)) > 1
+                else float("nan")
+            )
 
-            results.append({
-                "round": round_num,
-                "strategy": strategy,
-                "cumulative_inspections": len(currently_labeled_idx),
-                "cumulative_cost_usd": cumulative_cost,
-                "cumulative_discoveries": cumulative_discoveries,
-                "discoveries_per_inspection": cumulative_discoveries / max(1, len(currently_labeled_idx) - n_init),
-                "discoveries_per_usd": cumulative_discoveries / max(1.0, cumulative_cost),
-                "pr_auc_remaining": pr_auc,
-            })
-            
+            results.append(
+                {
+                    "round": round_num,
+                    "strategy": strategy,
+                    "cumulative_inspections": len(currently_labeled_idx),
+                    "cumulative_cost_usd": cumulative_cost,
+                    "cumulative_discoveries": cumulative_discoveries,
+                    "discoveries_per_inspection": cumulative_discoveries
+                    / max(1, len(currently_labeled_idx) - n_init),
+                    "discoveries_per_usd": cumulative_discoveries / max(1.0, cumulative_cost),
+                    "pr_auc_remaining": pr_auc,
+                }
+            )
+
             if round_num == n_rounds:
                 break
 
@@ -169,12 +186,12 @@ def simulate_active_learning(
                     acq_indices = np.arange(min(batch_size, len(y_test)))
             else:
                 pred_entropy = compute_predictive_entropy(proba_test)
-                
+
                 equity_boost = np.zeros(len(test_idx))
                 if not fairness_ref.empty and "census_tract" in test_df.columns:
                     test_with_tract = test_df.merge(fairness_ref, on="census_tract", how="left")
                     equity_boost = compute_equity_boost(test_with_tract)
-                
+
                 scores = compute_priority_score(
                     p_lead=proba_test,
                     uncertainty_score=pred_entropy,
@@ -182,10 +199,10 @@ def simulate_active_learning(
                     strategy=strategy,
                     lambda1=lambda1,
                     lambda2=lambda2,
-                    lambda3=lambda3
+                    lambda3=lambda3,
                 )
                 acq_indices = np.argsort(scores)[::-1][:batch_size]
-            
+
             # Update L_i
             new_idx = [test_idx[i] for i in acq_indices]
             currently_labeled_idx.update(new_idx)
@@ -201,16 +218,22 @@ def simulate_active_learning(
 
 def main():
     import argparse
+
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
     parser = argparse.ArgumentParser()
     parser.add_argument("--features", default="data/processed/features.parquet")
     parser.add_argument("--fairness-ref", default="data/interim/fairness_reference.parquet")
-    parser.add_argument("--fast", action="store_true", help="Use faster XGBoost with fewer estimators for testing")
+    parser.add_argument(
+        "--fast", action="store_true", help="Use faster XGBoost with fewer estimators for testing"
+    )
     parser.add_argument("--sample", action="store_true", help="Use sample dataset")
     args = parser.parse_args()
-    
+
     features_path = "data/processed/features_sample.parquet" if args.sample else args.features
-    simulate_active_learning(features_path=features_path, fairness_ref_path=args.fairness_ref, fast=args.fast)
+    simulate_active_learning(
+        features_path=features_path, fairness_ref_path=args.fairness_ref, fast=args.fast
+    )
+
 
 if __name__ == "__main__":
     main()

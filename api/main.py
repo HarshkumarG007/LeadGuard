@@ -320,7 +320,7 @@ async def priority_queue(
 
     # Uncertainty
     uncertainty_all = compute_predictive_entropy(probas)
-    
+
     # Conformal sets
     if state.conformal_global is not None:
         conformal_sets = state.conformal_global.predict_set(probas)

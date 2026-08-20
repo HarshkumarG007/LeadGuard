@@ -44,9 +44,17 @@ def test_full_pipeline_coverage(tmp_path):
         baseline_main()
 
     # 4. XGBoost
-    with patch("sys.argv", ["xgboost_model.py", "--config", "configs/train.yaml", "--features", features]):
-        # patch Optuna to run fast
-        with patch("optuna.study.Study.optimize") as mock_opt:
+    with patch(
+        "sys.argv", ["xgboost_model.py", "--config", "configs/train.yaml", "--features", features]
+    ):
+        # patch cfg to run optuna very fast
+        with patch("leadguard.models.xgboost_model.yaml.safe_load") as mock_yaml:
+            import yaml
+
+            with open("configs/train.yaml") as f:
+                cfg = yaml.safe_load(f)
+            cfg["optuna"] = {"n_trials": 1, "timeout_seconds": 60}
+            mock_yaml.return_value = cfg
             xgboost_main()
 
     # 5. Uncertainty
