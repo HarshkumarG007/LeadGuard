@@ -283,6 +283,9 @@ def train_xgboost(
             if improvement <= 0.10:
                 logger.warning("GATE NOT MET: improvement=%.1f%% <= 10%%", improvement * 100)
 
+    # Export the BASE model artifact for downstream SHAP etc.
+    best_model.save_model(output_dir / "model.json")
+
     # Export the CALIBRATED model artifact for serving
     import pickle
 
