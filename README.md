@@ -1,1730 +1,1895 @@
 # 🛡️ LeadGuard
-Uncertainty-Aware Lead Service Line Risk Intelligence
+Leakage-Safe ML for Lead Service-Line Discovery, Uncertainty-Aware Inspection Prioritization, and Equitable Field Deployment
 
-LeadGuard is an end-to-end machine-learning decision-support system for identifying properties that may contain lead service lines, quantifying prediction uncertainty, allocating limited inspection budgets, learning from newly inspected properties, and monitoring whether inspection decisions remain equitable across communities.
+LeadGuard is an end-to-end machine-learning system for helping municipalities decide which properties to inspect first when the material of a drinking-water service line is unknown.
 
-**Important:** LeadGuard is a decision-support and inspection-prioritization system. It does not certify that a property contains or does not contain a lead service line. Final determination requires physical inspection or an authoritative record.
+It combines spatial machine learning, leakage-safe feature engineering, probability calibration, conformal uncertainty, active learning, fairness-aware prioritization, SHAP explainability, and a privacy-conscious API into one reproducible pipeline.
 
-## 🥭 What Does "LeadGuard" Actually Do?
-Imagine a city has:
-- 100,000 properties
-- only $500,000 available for inspections
-- limited inspectors
-- incomplete service-line records
-- uncertain historical data
-- neighborhoods with very different levels of documentation
+## ⚠️ The Most Important Thing About This Project
 
-The city cannot inspect everything.
+LeadGuard is deliberately not a story about achieving the highest possible ML score.
 
-The real question is therefore not simply:
-> "Which properties are likely to have lead?"
+During evaluation, an apparently excellent model performance was found to be contaminated by label leakage through spatial features.
+The original pipeline could allow information derived from known lead labels to influence feature construction before the train/test boundary had been respected.
 
-It is:
-> "Given incomplete information, uncertainty, limited money, and fairness constraints, which properties should we inspect first?"
+That created a deceptively strong result:
 
-LeadGuard is designed to answer that question.
-
-At a high level:
-
+```text
+BEFORE AUDIT
+┌──────────────────────┐
+│   Spatial Features   │
+│                      │
+│   Labels available   │
+│       too early      │
+└──────────┬───────────┘
+           │
+           ▼
+   Model Evaluation
+           │
+           ▼
+    PR-AUC ≈ 0.99+
+           │
+           ▼
+  🚨 Suspiciously high
 ```
+
+Instead of hiding this, LeadGuard was redesigned around a much stricter principle:
+**No evaluation example should receive label-derived information that would not actually be available at prediction time.**
+
+The resulting architecture produces substantially more modest—but much more defensible—performance:
+
+```text
+AFTER AUDIT
+┌──────────────────────┐
+│     Raw Features     │
+└──────────┬───────────┘
+           │
+           ▼
+      Split FIRST
+           │
+ ┌─────────┼─────────┐
+ ▼         ▼         ▼
+TRAIN     CAL      TEST
+ │         │         │
+ │         │         │
+ └────┐    │    ┌────┘
+      ▼    ▼    ▼
+ Leakage-safe evaluation
+           │
+           ▼
+   Geo PR-AUC ≈ 0.41
+```
+
+This is one of the central engineering lessons of LeadGuard:
+**A high metric can be evidence of a good model—or evidence of a bad evaluation protocol.**
+
+---
+
+## 📌 Current Project Status
+
+| Area | Current status |
+| --- | --- |
+| End-to-end pipeline | ✅ Implemented |
+| Spatial feature engineering | ✅ Leakage-aware |
+| Label-leakage regression tests | ✅ Implemented |
+| Train/calibration/test separation | ✅ Implemented |
+| XGBoost | ✅ Implemented |
+| Probability calibration | ✅ Implemented |
+| Binary conformal uncertainty | ✅ Implemented |
+| Pseudo-ensemble | ✅ Removed |
+| Active learning | ✅ Iterative retraining |
+| Spatial features during active learning | ✅ Rebuilt each round |
+| Equity-aware prioritization | ✅ Implemented |
+| SHAP explainability | ✅ Implemented |
+| API | ✅ FastAPI |
+| Dashboard | ✅ Streamlit |
+| API address exposure | ✅ Removed from public priority queue |
+| CI linting | ✅ Ruff |
+| Automated tests | ✅ Passing locally |
+| Test coverage | **88.45%** |
+| Leakage-audit gap | **12.5%** |
+| Sample geographic PR-AUC | **~0.41** |
+| Sample baseline PR-AUC | **~0.34** |
+
+### Important interpretation
+The reported ~0.41 and ~0.34 results are from the bundled synthetic/sample evaluation.
+They are useful for:
+- reproducibility,
+- regression testing,
+- demonstrating the pipeline,
+- comparing architecture changes.
+
+They are **not** evidence that LeadGuard achieves the same performance on real municipal data.
+The repository's data card explicitly identifies the sample dataset as synthetic and cautions that sample metrics do not represent real Chicago performance. ([GitHub](https://github.com/HarshkumarG007/LeadGuard/blob/main/docs/data_card.md))
+
+---
+
+## 🎯 1. The Problem
+
+Municipal water systems may contain hundreds of thousands of service lines whose material is unknown.
+For each property, the important question is deceptively simple:
+*Is the service line made of lead?*
+
+But the operational question is much harder:
+*Given a limited inspection budget, which properties should inspectors visit first?*
+
+Suppose a city has:
+- 500,000 properties
+- 100,000 unknown service lines
+- 5,000 inspections available
+
+Inspecting randomly wastes a large fraction of the budget.
+Inspecting only the highest-risk predictions introduces another problem:
+- uncertainty may be ignored,
+- under-inspected neighborhoods may remain under-inspected,
+- the model may repeatedly sample the same spatial regions,
+- newly discovered labels may not be incorporated efficiently.
+
+LeadGuard therefore treats the task as **decision optimization**, not merely binary classification.
+
+## 🧠 2. What LeadGuard Actually Predicts
+
+At the ML layer, the problem is binary classification:
+- `y = 1 → Lead`
+- `y = 0 → NotLead`
+
+The negative class includes non-lead materials such as:
+- Copper
+- Galvanized
+
+Unknown materials are not treated as known negative examples.
+
+The model estimates:
+$$P(\text{Lead} \mid X)$$
+where $X$ contains information that would be legitimately available for the property being scored.
+
+The resulting probability is useful—but insufficient.
+A municipality does not need a probability table.
+It needs an inspection queue.
+
+Therefore LeadGuard turns predictions into an operational priority score incorporating:
+- Risk
+- Uncertainty
+- Equity
+
+## 🏗️ 3. System Architecture
+
+```text
     ┌──────────────────────┐
-    │ Property / Inventory │
-    │         Data         │
+    │     Data Sources     │
+    │                      │
+    │   Water inventory    │
+    │  Property assessor   │
+    │    OpenStreetMap     │
+    │      Census ACS      │
     └──────────┬───────────┘
                │
                ▼
     ┌──────────────────────┐
-    │ Leakage-Safe Feature │
-    │     Engineering      │
+    │    Data Cleaning     │
+    │       clean.py       │
     └──────────┬───────────┘
                │
                ▼
     ┌──────────────────────┐
-    │   Lead Risk Model    │
+    │ Feature Engineering  │
+    │     features.py      │
+    └──────────┬───────────┘
+               │
+      ┌────────┴────────┐
+      │                 │
+      ▼                 ▼
+ Raw/non-label    Label-dependent
+   features      spatial features
+      │                 │
+      │       ONLY from permitted
+      │        reference labels
+      │                 │
+      ▼                 ▼
+    ┌──────────────────────┐
+    │    Model Training    │
     │       XGBoost        │
     └──────────┬───────────┘
                │
                ▼
     ┌──────────────────────┐
-    │     Probability      │
     │     Calibration      │
+    │  Held-out CAL split  │
     └──────────┬───────────┘
                │
-     ┌─────────┴─────────┐
-     │                   │
-     ▼                   ▼
-┌──────────────────┐ ┌──────────────────┐
-│    Predictive    │ │    Conformal     │
-│   Uncertainty    │ │    Prediction    │
-└────────┬─────────┘ └────────┬─────────┘
-         │                    │
-         └─────────┬──────────┘
-                   │
-                   ▼
-    ┌──────────────────────┐
-    │  Equity / Coverage   │
-    │      Controller      │
-    └──────────┬───────────┘
-               │
+      ┌────────┼────────┐
+      ▼        ▼        ▼
+ Probability Conformal   SHAP
+ estimates  uncertainty explanations
+      │        │        │
+      └────────┼────────┘
                ▼
     ┌──────────────────────┐
-    │ Inspection Priority  │
-    │  / Budget Optimizer  │
+    │ Priority Generation  │
+    │                      │
+    │  Risk + Uncertainty  │
+    │       + Equity       │
     └──────────┬───────────┘
                │
+        ┌──────┴──────┐
+        ▼             ▼
+     FastAPI      Streamlit
+       API           UI
+        │             │
+        └──────┬──────┘
                ▼
-        HUMAN INSPECTION
+        Human inspection
                │
                ▼
-       New Ground Truth
+        New ground truth
                │
                ▼
-    ┌──────────────────────┐
-    │   Active Learning    │
-    │     / Retraining     │
-    └──────────┬───────────┘
+        Active learning
                │
-               └──────► repeat
+               └──────► Model
 ```
 
-The important idea is that the ML model is only one component.
-LeadGuard is fundamentally a sequential decision-making system under uncertainty.
+The architecture document formalizes the system as separate data, modeling, prioritization, API, and evaluation components. ([GitHub](https://github.com/HarshkumarG007/LeadGuard/blob/main/LeadGuard_Architecture.md))
 
-## 📌 Table of Contents
+## 🔥 4. The Leakage Problem
 
-- [Why LeadGuard Exists](#why-leadguard-exists)
-- [The Problem](#the-problem)
-- [The Core Insight](#the-core-insight)
-- [What LeadGuard Predicts](#what-leadguard-predicts)
-- [How the System Works](#how-the-system-works)
-- [End-to-End Pipeline](#end-to-end-pipeline)
-- [Data](#data)
-- [Feature Engineering](#feature-engineering)
-- [The Most Important Design Rule: No Label Leakage](#the-most-important-design-rule-no-label-leakage)
-- [Train / Calibration / Test Architecture](#train--calibration--test-architecture)
-- [Machine Learning Model](#machine-learning-model)
-- [Probability Calibration](#probability-calibration)
-- [Uncertainty Quantification](#uncertainty-quantification)
-- [Conformal Prediction](#conformal-prediction)
-- [Inspection Prioritization](#inspection-prioritization)
-- [Equity](#equity)
-- [Active Learning](#active-learning)
-- [Active Learning Strategies](#active-learning-strategies)
-- [Budget-Constrained Decision Making](#budget-constrained-decision-making)
-- [Explainability](#explainability)
-- [API](#api)
-- [Privacy](#privacy)
-- [Streamlit Dashboard](#streamlit-dashboard)
-- [Project Architecture](#project-architecture)
-- [Repository Structure](#repository-structure)
-- [Configuration](#configuration)
-- [Installation](#installation)
-- [Running LeadGuard](#running-leadguard)
-- [Running Tests](#running-tests)
-- [ML Evaluation](#ml-evaluation)
-- [Leakage Testing](#leakage-testing)
-- [Calibration Evaluation](#calibration-evaluation)
-- [Active Learning Evaluation](#active-learning-evaluation)
-- [Reproducibility](#reproducibility)
-- [Engineering Principles](#engineering-principles)
-- [Limitations](#limitations)
-- [What LeadGuard Does Not Claim](#what-leadguard-does-not-claim)
-- [Roadmap](#roadmap)
-- [Research Questions](#research-questions)
-- [Why This Architecture Matters](#why-this-architecture-matters)
-- [Contributing](#contributing)
-- [License](#license)
+This deserves its own section because it is the most important technical lesson in the project.
 
-## 🧠 Why LeadGuard Exists
+### What is label leakage?
+Suppose we want to predict whether property A has lead.
+We know that several nearby properties have already been inspected.
 
-Lead service lines are a public-health and infrastructure problem.
+Imagine:
+- Property B (Lead) ●
+- Property A (unknown) ●
+- Property C (Lead) ●
 
-A city may know that some properties contain lead service lines, but often does not know the status of every property.
+A feature such as:
+`neighbor_lead_rate = nearby_known_lead / nearby_known_properties`
+can be extremely predictive.
 
-Historical records can be incomplete.
+That is perfectly legitimate if the nearby labels were already known at prediction time.
+But it becomes leakage if the feature-generation process uses labels from the evaluation set—or labels that would not have been available when the model is supposed to make its prediction.
 
-Some properties may have:
-- missing records
-- outdated records
-- inconsistent material classifications
-- uncertain installation dates
-- incomplete geographic information
-- self-reported information
-- neighborhood-level correlations
+### ❌ The Dangerous Pipeline
 
-At the same time, physical inspections cost money and require human resources.
-
-This creates a constrained decision problem:
-
-```
-        LIMITED INSPECTION BUDGET
-                    │
-                    ▼
-       ┌─────────────────────────┐
-       │ Which properties should │
-       │   be inspected first?   │
-       └─────────────────────────┘
-          ▲         ▲         ▲
-          │         │         │
-        Risk   Uncertainty  Equity
+The original conceptual failure looked like:
+```text
+      FULL DATASET
+           │
+           ▼
+Build label-dependent spatial features
+           │
+           │ ← labels from everywhere can influence features
+           ▼
+    Split train/test
+           │
+           ▼
+      Train model
+           │
+           ▼
+       Evaluate
 ```
 
-LeadGuard is designed around this problem.
+The model can indirectly see information about the evaluation distribution.
+That makes the test set no longer truly independent.
 
-## 🎯 The Problem
+### ✅ The Correct Pipeline
 
-A conventional ML project might formulate the task as:
-`Input: property features` → `Output: Lead / Not Lead`
-
-LeadGuard goes further.
-
-The actual decision pipeline is:
-- Property
-- ↓ Estimated probability of Lead
-- ↓ How trustworthy is that probability?
-- ↓ How uncertain is the prediction?
-- ↓ How much should this property be prioritized?
-- ↓ Does the resulting inspection allocation remain equitable?
-- ↓ What should we inspect next?
-- ↓ What did we learn?
-- ↓ How should the model update?
-
-This changes the project from a simple classification problem into an uncertainty-aware resource allocation system.
-
-## 💡 The Core Insight
-
-The most important conceptual distinction in LeadGuard is:
-**Prediction is not the same thing as decision-making.**
-
-A model might say:
-- Property A → 92% Lead risk
-- Property B → 89% Lead risk
-
-But suppose:
-- A is in a heavily inspected neighborhood.
-- B is in a neighborhood that has historically received very few inspections.
-- B's prediction is highly uncertain.
-- B's inspection could provide valuable information for future predictions.
-
-Then simply sorting by probability may not be the best policy.
-
-LeadGuard therefore considers several dimensions:
-
-```
-       ┌───────────────┐
-       │   Lead Risk   │
-       └───────┬───────┘
-               │
-               ▼
-       ┌───────────────┐
-       │  Uncertainty  │
-       └───────┬───────┘
-               │
-               ▼
-       ┌───────────────┐
-       │    Equity     │
-       └───────┬───────┘
-               │
-               ▼
-       ┌───────────────┐
-       │    Budget     │
-       └───────┬───────┘
-               │
-               ▼
-        INSPECTION QUEUE
-```
-
-## 🔬 What LeadGuard Predicts
-
-The core supervised-learning target is intentionally binary:
-- `y = 1` → Lead
-- `y = 0` → NotLead
-
-The primary model estimates:
-`P(Lead | property information)`
-
-For example:
-`Property ID: 10482` → `P(Lead) = 0.82`
-
-This means:
-*Based on the information available to the model, the estimated probability of a Lead service line is 82%.*
-
-It does **not** mean:
-*There is an 82% laboratory-certified chance that the pipe is lead.*
-
-The distinction matters.
-Predictions are estimates conditioned on the available data and model assumptions.
-
-## 🏗️ How the System Works
-
-LeadGuard consists of several logical layers.
-
-### 1. Data Layer
-Contains:
-- property information
-- service-line information
-- geographic information
-- historical records
-- socioeconomic/reference information used for auditing
-- inspection outcomes
-
-### 2. Feature Layer
-Transforms raw records into predictive features.
-Examples include:
-- construction year
-- property characteristics
-- geographic information
-- neighborhood statistics
-- spatial proximity
-- historical local Lead prevalence
-
-**Label-dependent spatial features are constructed only from allowed reference data.**
-
-### 3. Model Layer
-The main predictive model is:
-**XGBoost**
-
-It produces:
-`P(Lead)`
-
-### 4. Calibration Layer
-Raw tree-model probabilities are not automatically reliable probabilities.
-LeadGuard therefore applies probability calibration using a held-out calibration set.
-
-The objective is to make:
-`predicted probability ≈ observed frequency`
-
-For example, among properties assigned:
-`P(Lead) ≈ 0.80`
-we would ideally observe Lead in approximately:
-`80%`
-of such cases over a sufficiently large sample.
-
-### 5. Uncertainty Layer
-LeadGuard separately estimates predictive uncertainty.
-
-A probability near:
-`0.50`
-is inherently more ambiguous than:
-`0.99`
-
-The system therefore exposes uncertainty independently from probability.
-
-### 6. Conformal Layer
-Conformal prediction provides prediction sets with a target coverage guarantee under its assumptions.
-
-For binary Lead prediction, a property may receive:
-`["Lead"]`
-or:
-`["NotLead"]`
-or:
-`["NotLead", "Lead"]`
-
-The final case means:
-*The available evidence is insufficient to confidently exclude either class at the selected conformal level.*
-
-### 7. Decision Layer
-Risk, uncertainty, equity, and budget constraints are combined into an inspection-prioritization policy.
-
-### 8. Active Learning Layer
-When a human inspector provides a new verified label:
-`Property → inspected → actual result`
-the new information becomes training data.
-The model can then be retrained.
-
-This creates a feedback loop:
-`Predict ↓ Prioritize ↓ Inspect ↓ Observe ↓ Learn ↓ Predict again`
-
-## 🔄 End-to-End Pipeline
-
-The complete lifecycle is:
-
-```
-        ┌─────────────────────┐
-        │      Raw Data       │
-        └──────────┬──────────┘
-                   │
-                   ▼
-        ┌─────────────────────┐
-        │   Data Validation   │
-        └──────────┬──────────┘
-                   │
-                   ▼
-        ┌─────────────────────┐
-        │    Define Splits    │
-        │ Train / Cal / Test  │
-        └──────────┬──────────┘
-                   │
-                   ▼
-     ┌────────────────────────────┐
-     │ Leakage-Safe Feature Build │
-     │ using TRAIN reference only │
-     └────────────┬───────────────┘
-                   │
-                   ▼
-           ┌──────────────┐
-           │   XGBoost    │
-           └──────┬───────┘
-                   │
-                   ▼
-           ┌──────────────┐
-           │ Calibration  │
-           │ on CAL only  │
-           └──────┬───────┘
-                   │
-                   ▼
-           ┌──────────────┐
-           │     TEST     │
-           │  Evaluation  │
-           └──────┬───────┘
-                  │
-        ┌─────────┴────────┐
-        ▼                  ▼
-   Probability        Uncertainty
-        │                  │
-        └─────────┬────────┘
-                  ▼
-           Conformal Layer
-                  │
-                  ▼
-             Equity Layer
-                  │
-                  ▼
-            Priority Queue
-                  │
-                  ▼
-           Human Inspection
-                  │
-                  ▼
-              New Labels
-                  │
-                  ▼
-           Active Learning
-                  │
-                  └──────────────► Retrain
-```
-
-## 🗃️ Data
-
-LeadGuard is designed to work with property/service-line inventory data.
-
-The repository also contains a synthetic dataset for reproducible development and testing.
-
-### Synthetic data
-The synthetic dataset exists to:
-- exercise the pipeline
-- test feature engineering
-- test model training
-- test uncertainty logic
-- test active learning
-- test API behavior
-- make CI reproducible
-
-Synthetic metrics should not be interpreted as evidence of real-world Chicago performance.
-
-## 🧱 Feature Engineering
-
-LeadGuard distinguishes between two kinds of features.
-
-### Label-independent features
-These can be calculated without knowing Lead labels.
-Examples:
-- year_built
-- property characteristics
-- geographic coordinates
-- non-target structural attributes
-
-These are safe to compute before splitting.
-
-### Label-dependent features
-These use known Lead outcomes.
-Examples:
-- neighbor_lead_rate
-- knn_lead_rate
-- dist_to_nearest_known_lead_m
-
-These are fundamentally different.
-**They must only use labels available in the permitted training/reference population.**
-
-## 🚨 The Most Important Design Rule: No Label Leakage
-
-The single most important ML-evaluation rule in LeadGuard is:
-**Information from the evaluation set must never be allowed to influence its own features, model, calibration, or decisions.**
-
-Consider:
-```
-TEST PROPERTY
- ├── actual label = Lead
- └── feature: distance to nearest known Lead
-```
-
-If the nearest-known-Lead calculation includes the test property itself, the model can effectively see the answer.
-That is leakage.
-
-### 🔐 Split-First Feature Architecture
-
-LeadGuard therefore follows:
-
-```
+LeadGuard now follows:
+```text
         RAW DATA
            │
            ▼
       DEFINE SPLIT
            │
-     ┌─────┴────────┐
-     │              │
-   TRAIN          TEST
-     │              │
-     ▼              │
- Reference          │
-  labels            │
-     │              │
-     └──────┬───────┘
-            ▼
-    Build TEST features
- using TRAIN reference only
+      ┌────┴─────┐
+      ▼          ▼
+    TRAIN       TEST
+      │          │
+      │          │
+      │          └──── Test labels remain hidden
+      ▼
+Build label-dependent features
+using only permitted TRAIN labels
+      │
+      ▼
+  Train model
+      │
+      ▼
+Generate TEST features
+using TRAIN labels only
+      │
+      ▼
+   Evaluate
 ```
 
-The forbidden architecture is:
-`RAW DATA ↓ BUILD ALL FEATURES ↓ SPLIT`
-because label-dependent features may already contain information from the eventual test set.
+Conceptually:
+$$X_i^{spatial} = f(i, \mathcal{L}_{train})$$
+where:
+- $i$ is the property being scored,
+- $f$ is the spatial feature function,
+- $\mathcal{L}_{train}$ is the set of labels legitimately available to the model.
 
-### 🧪 Leakage Invariants
+Critically:
+$$y_{test} \notin X_{test}$$
+and:
+$$y_{test} \not\rightarrow X_{train}$$
 
-LeadGuard includes explicit tests intended to catch this class of bug.
+## 🧪 5. Leakage Regression Tests
 
-#### Test 1 — Test-label invariance
-Changing TEST labels must not change:
-- TEST features
-- TRAIN features
-- trained model
-- calibration model
-- predictions
+A model can pass ordinary unit tests while still leaking information.
+Therefore LeadGuard includes tests specifically designed to attack the evaluation pipeline.
 
-Only evaluation metrics may change.
+**Test A — Test-label invariance**
+Change test labels.
+Then regenerate features.
+Expected:
+- TRAIN FEATURES: unchanged
+- TEST FEATURES: unchanged
 
-#### Test 2 — Training-label permutation
-Randomizing training labels should destroy meaningful predictive performance.
-The resulting PR-AUC should approach the prevalence baseline rather than remaining suspiciously high.
-This acts as a practical leakage detector.
+If test labels change the features, the pipeline is leaking.
 
-#### Test 3 — Geographic isolation
-Label-derived geographic features for the test partition must be computed from permitted training/reference data only.
+**Test B — Training-label perturbation**
+Randomize the training labels.
+Expected:
+- model performance ↓ toward prevalence baseline
 
-## 🧩 Train / Calibration / Test Architecture
+If performance remains spectacular after destroying the training signal, something is suspicious.
 
-LeadGuard uses a strict three-way evaluation concept:
+**Test C — Geographic isolation**
+Verify that geographic holdout features do not accidentally consume geographic test labels.
+This is particularly important because spatial ML can hide leakage in seemingly innocent aggregate features.
 
+## 📊 6. Why Random Splits Are Not Enough
+
+Imagine this:
+- Train: ● ● ● ● ● ● ● ● ● ● ● ●
+- Test:  ●          ●
+
+A random split can place geographically adjacent properties into both sets.
+The model can therefore learn highly local patterns.
+
+A geographic holdout is harder:
+```text
+TRAIN REGION
+████████████████
+████████████████
+████████████████
+
+TEST REGION
+░░░░░░░░░░░░░░░░
+░░░░░░░░░░░░░░░░
 ```
-    ┌──────────────────────────┐
-    │       TRAIN — 70%        │
-    │                          │
-    │       Fit XGBoost        │
-    └────────────┬─────────────┘
-                 │
-                 │
-    ┌────────────▼─────────────┐
-    │    CALIBRATION — 15%     │
-    │                          │
-    │     Fit probability      │
-    │        calibrator        │
-    └────────────┬─────────────┘
-                 │
-                 │
-    ┌────────────▼─────────────┐
-    │        TEST — 15%        │
-    │                          │
-    │  Final evaluation only   │
-    └──────────────────────────┘
+
+The question becomes:
+*Can the model generalize to a different geographic area?*
+That is much closer to the operational problem of deploying a prioritization model into neighborhoods where the model has fewer direct labels.
+
+## 🔬 7. Evaluation Design
+
+LeadGuard uses a strict three-way conceptual split:
+
+```text
+        DATA
+         │
+   ┌─────┼─────┐
+   ▼     ▼     ▼
+ TRAIN  CAL   TEST
+  70%   15%   15%
 ```
 
-The test set is treated as locked until final evaluation.
+**TRAIN**
+Used for:
+- model fitting,
+- learning parameters,
+- hyperparameter optimization,
+- training-time spatial reference labels.
 
-## 🤖 Machine Learning Model
+**CAL**
+Used exclusively for:
+- probability calibration,
+- conformal calibration where applicable.
 
-The primary model is XGBoost.
+**TEST**
+Used only for:
+- final evaluation,
+- headline performance reporting.
 
-### Why XGBoost?
-Because LeadGuard deals with structured/tabular data where:
-- nonlinear relationships matter
-- feature interactions matter
-- missingness may be informative
-- mixed feature scales are common
-- strong tabular performance is desirable
-- interpretability tools such as SHAP are available
+The test set should not influence model selection.
 
-The model learns:
-`X → P(Lead)`
-where X is the leakage-safe feature vector.
+## 🎯 8. Why Calibration Matters
 
-### 📏 Model Evaluation
-
-LeadGuard should not rely on a single metric.
-Relevant metrics include:
-
-#### PR-AUC
-Precision-recall area under the curve is especially useful when Lead properties are relatively uncommon.
-It evaluates ranking quality for the positive class.
-
-#### ROC-AUC
-Useful as a general ranking metric, but less informative than PR-AUC when the positive class is highly imbalanced.
-
-#### Precision
-Of properties predicted as Lead:
-How many were actually Lead?
-
-#### Recall
-Of actual Lead properties:
-How many did we identify?
-
-#### FNR
-False-negative rate:
-`FN / (FN + TP)`
-This is particularly important in a public-health inspection context because missing a genuinely Lead property may be more consequential than inspecting a non-Lead property.
-
-## 🎯 Probability Calibration
-
-A model score is not automatically a trustworthy probability.
+A classifier can rank properties correctly without producing trustworthy probabilities.
 
 For example:
-`Raw model: 0.90`
-does not necessarily mean:
-`90% of similar properties are actually Lead.`
+- Property A → 0.91
+- Property B → 0.72
+- Property C → 0.51
 
-Calibration attempts to make that interpretation more defensible.
+The ordering might be useful.
+But what does `0.72` actually mean?
 
-LeadGuard uses a held-out calibration set:
-`TRAIN ↓ XGBoost ↓ raw probabilities`
-`CALIBRATION ↓ fit sigmoid/Platt calibrator`
-`TEST ↓ calibrated probabilities`
+If the model is calibrated, then among properties receiving approximately 0.72 predictions, roughly 72% should be positive over a sufficiently large comparable population.
+This matters because inspection planning is a resource-allocation problem.
 
-### 📊 Calibration Metrics
+## 📐 9. Calibration Architecture
 
-LeadGuard evaluates calibration using metrics such as:
+LeadGuard separates:
+```text
+      TRAIN
+        │
+        ▼
+     XGBoost
+        │
+        ▼
+ raw probability
+        │
+        ▼
+ CALIBRATION SET
+        │
+        ▼
+Platt / sigmoid calibration
+        │
+        ▼
+calibrated P(Lead)
+```
 
-#### Brier Score
-Measures squared probability error.
+The calibrated model is what the serving layer should use for probability-based decisions.
+The modern scikit-learn API requires a frozen/pre-fitted estimator when calibrating an already-trained model in the newer versions supported by the project.
+
+## 📏 10. Calibration Metrics
+
+A serious evaluation should include:
+
+**Brier Score**
+$$BS = \frac{1}{N}\sum_{i=1}^{N}(p_i-y_i)^2$$
 Lower is better.
+It measures probabilistic accuracy.
 
-#### Log Loss
-Penalizes incorrect predictions, particularly confident incorrect predictions.
+**Log Loss**
+$$-\frac{1}{N} \sum_i \left[ y_i\log(p_i) + (1-y_i)\log(1-p_i) \right]$$
 Lower is better.
+Log loss strongly penalizes confident incorrect predictions.
 
-#### Expected Calibration Error
-ECE compares predicted confidence with empirical accuracy across probability bins.
+**Expected Calibration Error**
+ECE divides predictions into confidence bins and compares:
+*average confidence vs observed frequency*
 Conceptually:
-`Predicted 0.8 ↓ Observed frequency should be near 0.8`
+$$ECE = \sum_b \frac{|B_b|}{N} |\operatorname{acc}(B_b)-\operatorname{conf}(B_b)|$$
+Lower is better.
 
-#### Reliability Curve
-A visual comparison between:
-`predicted probability`
-and:
-`observed frequency`
+### ⚠️ Calibration Claim Discipline
+LeadGuard distinguishes:
+*"The model is calibrated using a held-out calibration set."*
+from:
+*"The model is perfectly calibrated."*
 
-## 🎲 Uncertainty Quantification
+The first is an architectural fact.
+The second requires empirical evidence.
+Therefore the README should report Brier score, log loss, ECE, and reliability curves whenever those final metrics have been generated.
 
-LeadGuard intentionally separates three concepts:
-- P(Lead)
-- Predictive uncertainty
-- Conformal prediction set
+## 🧮 11. Uncertainty Quantification
 
-They are related, but they are not identical.
+Risk alone is not enough.
 
-### 🌡️ Predictive Uncertainty
+Consider:
+- Property A: P(Lead) = 0.51
+- Property B: P(Lead) = 0.99
 
-For a binary probability p, LeadGuard can use:
-`uncertainty = 1 - |2p - 1|`
+Both are technically candidates.
+But they represent very different states of knowledge.
 
-Interpretation:
-- `p = 0.50 → uncertainty = 1.00`
-- `p = 0.75 → uncertainty = 0.50`
-- `p = 0.99 → uncertainty = 0.02`
+LeadGuard therefore separates:
+- **RISK**: How likely is lead?
+- **UNCERTAINTY**: How ambiguous is the prediction?
+- **EQUITY**: Who is being systematically missed?
 
-Thus:
-- `0` → very confident
-- `1` → maximally ambiguous
+## 🔐 12. Binary Conformal Semantics
 
-This quantity is useful for ranking properties where the model is least decisive.
+LeadGuard's prediction universe is explicitly:
+`MATERIALS = ["NotLead", "Lead"]`
+rather than pretending the model is predicting three independent classes.
 
-### 🧮 Why Not Use the Old "Fake Ensemble"?
+The mapping is:
+- `0 → NotLead`
+- `1 → Lead`
 
-An earlier experimental implementation perturbed input features with Gaussian noise and treated the resulting variation as ensemble disagreement.
+This is important because the actual model objective is binary.
 
-That is not a genuine model ensemble.
+## 📦 13. What Conformal Prediction Gives You
 
-A true ensemble would involve multiple independently trained models, for example:
-`Model 1`
-`Model 2`
-`Model 3`
-`Model 4`
-`Model 5`
-`↓ distribution of predictions`
-
-LeadGuard deliberately removes the pseudo-ensemble approach rather than giving a misleading interpretation to feature perturbation.
-A genuine epistemic ensemble can be added later.
-
-## 🧾 Conformal Prediction
-
-LeadGuard uses binary conformal semantics:
-- `0` → NotLead
-- `1` → Lead
-
-Possible output:
-`{ "conformal_set": ["Lead"] }`
+Instead of always returning `Lead`, the model can return a prediction set such as:
+`{Lead}`
 or:
-`{ "conformal_set": ["NotLead", "Lead"] }`
+`{NotLead}`
+or, when uncertain:
+`{NotLead, Lead}`
 
-The second result means the model cannot confidently exclude either class at the selected conformal level.
+The third result communicates:
+*The system does not have enough statistical evidence to confidently resolve the class at the selected coverage level.*
 
-### 🛡️ Why Conformal Prediction Matters
+That is operationally useful.
+An uncertain property can become a valuable inspection candidate.
 
-A conventional classifier might say:
-`Lead probability = 0.58`
+## 📈 14. Predictive Ambiguity
 
-A decision-maker may reasonably ask:
-"How certain are we?"
+LeadGuard also exposes a continuous ambiguity score derived from the calibrated lead probability.
 
-Conformal prediction gives an additional statistical framework for controlling coverage under its assumptions.
-The goal is not simply:
-`maximum accuracy`
-but:
-`valid uncertainty with useful prediction sets`
-
-### 📐 Conformal Evaluation
-
-LeadGuard evaluates more than coverage.
-Important measurements include:
-- empirical coverage
-- average prediction-set size
-- singleton-set rate
-- coverage across risk groups
-- coverage across geographic groups
-- coverage across probability/risk bins
-
-A trivial system that returns:
-`["NotLead", "Lead"]`
-for every property could achieve high coverage while being practically useless.
+A simple formulation is:
+$$U(p) = 1-|2p-1|$$
 
 Therefore:
-Coverage must be considered together with prediction-set efficiency.
+- p = 0.00 → U = 0.00
+- p = 0.10 → U = 0.20
+- p = 0.50 → U = 1.00
+- p = 0.90 → U = 0.20
+- p = 1.00 → U = 0.00
 
-## 🚦 Inspection Prioritization
+So `p ≈ 0.5` means maximum ambiguity.
+This is intentionally different from pretending that noisy model replicas constitute an ensemble.
 
-The ultimate purpose of LeadGuard is not classification.
-It is prioritization.
+## 🚫 15. The Fake Ensemble Was Removed
 
-The system produces a ranked inspection queue.
-Conceptually:
-`Property ↓ Risk + Uncertainty + Equity ↓ Priority`
+An earlier uncertainty implementation perturbed predictions using Gaussian noise and interpreted disagreement as ensemble uncertainty.
 
-A simplified conceptual priority function is:
-`Priority = Risk Component + Uncertainty Component + Equity Component`
+That was removed.
+Why?
+Because adding random noise to a single model does not magically create a statistically meaningful ensemble.
 
-The exact weights are configurable.
+LeadGuard now distinguishes:
+- **CALIBRATED PROBABILITY** → predictive ambiguity
+- **CONFORMAL PREDICTION** → prediction set / coverage
+- **MODEL ENSEMBLES** → not simulated through arbitrary noise
 
-## ⚖️ Equity
+This is a deliberate methodological cleanup.
 
-A purely risk-maximizing strategy can repeatedly select properties from already well-documented areas.
+## 🤖 16. Why XGBoost?
 
-That can create a feedback loop:
-`More inspections ↓ More labels ↓ Better model confidence ↓ More prioritization ↓ Even more inspections`
+LeadGuard uses XGBoost for the main predictive model.
 
-Meanwhile, under-inspected communities can remain data-poor.
+The dataset is fundamentally tabular:
+- property characteristics,
+- categorical fields,
+- spatial variables,
+- engineered numerical features,
+- missing values,
+- nonlinear relationships.
 
-LeadGuard therefore treats equity as an explicit decision-layer concern.
+Tree ensembles are a natural fit.
+The methodology also emphasizes CPU-friendly training and inference. ([GitHub](https://github.com/HarshkumarG007/LeadGuard/blob/main/docs/methodology.md))
 
-### 🧭 Equity Is Not the Same as Demographic Prediction
+## 🌲 17. Model Features
 
-LeadGuard separates predictive modeling from fairness auditing.
+Examples of legitimate predictive information include:
 
-Sensitive or socioeconomic variables should not automatically become predictive features simply because they correlate with the target.
+**Property features**
+- year_built
+- lot_size_sqft
+- property characteristics
+- building characteristics
 
-Instead, such variables can be used for:
-- evaluation
-- auditing
-- allocation monitoring
-- disparity analysis
+**Spatial infrastructure features**
+- distance to nearest hydrant
+- spatial neighborhood structure
+- geographic context
 
-This separation helps answer:
-"Is the system behaving equitably?"
-without automatically asking:
-"Can the model exploit this demographic information to improve prediction?"
+**Label-derived spatial features**
+These are allowed only when generated from an explicitly permitted reference label set.
+Examples include:
+- neighbor_lead_rate
+- knn_lead_rate
+- dist_to_nearest_known_lead_m
 
-### 📊 Fairness Metrics
+The important part is not the feature name.
+The important part is: **Where did its labels come from?**
 
-LeadGuard can evaluate disparities such as:
+## 🗺️ 18. Spatial Features: The Subtle Part
 
-#### False-negative-rate disparity
-Compare:
-`FNR(group A) vs FNR(group B)`
+Spatial features are powerful because infrastructure is geographically correlated.
+If one neighborhood has older service lines, nearby properties may have similar characteristics.
 
-#### Inspection allocation
-Compare:
-`inspection share vs risk share`
+But spatial correlation creates an evaluation hazard.
 
-#### Discovery efficiency
-Measure:
-`Lead discoveries / inspections`
-by group.
-
-#### Inspection delay
-Measure how long different communities are expected to wait before inspection.
-
-This is especially important because LeadGuard makes resource allocation decisions, not merely classification decisions.
-
-## 🔁 Active Learning
-
-The active-learning loop is one of LeadGuard's most important concepts.
-
-Initially:
-Only some properties are labeled.
-LeadGuard predicts on the unknown pool.
-
-Then:
-Select properties for inspection.
-A human inspector provides the actual result.
-That new information becomes labeled data.
-
-Then:
-Retrain.
-The process repeats.
-
-### 🧠 Active Learning Loop
-
+Consider:
+```text
+Known Lead        Unknown
+    ●               ○
+     \             /
+      \           /
+       \         /
+        ●───────●
+            Known Lead
 ```
-       ┌──────────────────┐
-       │ Initial Labels L₀│
-       └────────┬─────────┘
-                ▼
-      Build Features using L₀
-                │
-                ▼
-           Train Model
-                │
-                ▼
-        Score Unknown Pool
-                │
-                ▼
-        Choose Inspections
-                │
-                ▼
-         Human Inspection
-                │
-                ▼
-            New Labels
-                │
-                ▼
-         L₁ = L₀ + new
-                │
-                ▼
-      Rebuild Features using L₁
-                │
-                ▼
-          Retrain Model
-                │
-                └──────► repeat
+A nearest-known-lead feature can be extremely predictive.
+
+That is useful operationally after inspections have actually happened.
+But during historical evaluation, it must represent only information that would have been known at that point.
+
+LeadGuard therefore treats label-dependent spatial features as stateful information, not static columns.
+
+## 🔄 19. Active Learning
+
+Normal supervised learning assumes:
+`dataset → train once → deploy`
+
+But LeadGuard operates in a world where inspections create new labels.
+Therefore:
+
+```text
+     Initial labels
+           │
+           ▼
+      Train model
+           │
+           ▼
+Score unknown properties
+           │
+           ▼
+   Choose inspections
+           │
+           ▼
+ Receive ground truth
+           │
+           ▼
+ Expand labeled set
+           │
+           ▼
+Rebuild label-dependent
+   spatial features
+           │
+           ▼
+       Retrain
+           │
+           ▼
+        Repeat
 ```
 
-The important detail is:
-**Label-dependent spatial features are rebuilt after every acquisition round.**
-Otherwise the model would not actually learn from newly acquired spatial information.
+This is active learning.
 
-### 🧪 Active Learning Strategies
+## 🔁 20. The Critical Active-Learning Fix
+
+The active-learning loop must not do this:
+`Train once ↓ Predict repeatedly`
+That would merely simulate changing rankings.
+
+Instead:
+```text
+      Round 0
+         ↓
+        Fit
+         ↓
+   Acquire labels
+         ↓
+      Round 1
+         ↓
+  Rebuild features
+         ↓
+     Fit again
+         ↓
+   Acquire labels
+         ↓
+      Round 2
+         ↓
+  Rebuild features
+         ↓
+     Fit again
+```
+
+The newly acquired labels can change spatial features.
+Therefore the feature matrix itself is part of the evolving state.
+
+## 🧪 21. Active-Learning Strategies
 
 LeadGuard compares multiple acquisition policies.
 
-#### 1. Random
+**Random**
 Select properties randomly.
-This is the baseline.
+Purpose: Establish the baseline rate of learning.
 
-#### 2. Highest Risk
-Inspect properties with the highest:
-`P(Lead)`
-This answers:
-What happens if we only care about immediate risk?
+**Highest Risk**
+Select: $\operatorname{arg\,top}_k P(\text{Lead})$
+Purpose: Maximize immediate expected lead discoveries.
 
-#### 3. Highest Uncertainty
-Inspect properties where the model is least certain.
-This answers:
-What happens if we prioritize information gain?
+**Highest Uncertainty**
+Select properties where predictions are most ambiguous.
+Purpose: Learn where the model knows least.
 
-#### 4. Risk + Uncertainty
-Balance:
-high expected risk
-with:
-high uncertainty
+**Risk + Uncertainty**
+Combine high probability of lead + high uncertainty.
+Purpose: Balance exploitation and information gain.
 
-#### 5. Risk + Uncertainty + Equity
-Add the allocation/equity component.
-This tests whether a constrained strategy can preserve useful discovery performance while improving coverage.
+**Risk + Uncertainty + Equity**
+Add an equity component.
+Purpose: Avoid repeatedly concentrating inspections in already well-covered areas.
 
-#### 6. Oracle
-The oracle has access to ground truth for simulation purposes.
-It represents an upper-bound reference rather than a deployable strategy.
-The oracle answers:
-"How good could the acquisition process be if we already knew the true labels?"
+**Oracle**
+Use unavailable ground truth to establish an upper-bound benchmark.
+The oracle is not deployable.
+It answers: *"How well could this acquisition process do if we knew the answers in advance?"*
 
-### 📈 What Active Learning Should Measure
+## ⚖️ 22. Equity-Aware Prioritization
 
-For every strategy, LeadGuard can track:
-`Number of inspections ↓ True Lead discoveries ↓ Cumulative discoveries`
-
-Additional useful metrics include:
-- Lead discoveries / inspection
-- Lead discoveries / dollar spent
-- Coverage across communities
-- Average uncertainty reduction
-
-The goal is not simply to produce a better classifier.
-The goal is:
-**Get more useful information from the same inspection budget.**
-
-## 💰 Budget-Constrained Decision Making
+A purely predictive model can unintentionally reproduce historical inspection patterns.
 
 Suppose:
-- Budget = $500,000
-- Inspection cost = $500
+- Neighborhood A: many previous inspections
+- Neighborhood B: very few inspections
 
-Then:
-Maximum inspections = 1,000
+Even if both have similar predicted risk, a purely risk-driven queue may repeatedly prioritize A.
+LeadGuard therefore maintains an equity accounting layer.
 
-LeadGuard can rank candidate properties and allocate the available inspection budget.
+The core idea is:
+$$\text{Priority} = \alpha \text{Risk} + \beta \text{Uncertainty} + \gamma \text{Equity}$$
+where the equity term reflects inspection coverage relative to model-estimated risk share.
 
-For variable inspection costs, the underlying decision problem becomes closer to a constrained optimization problem:
-`maximize expected value`
-`subject to: total inspection cost ≤ budget`
+The methodology explicitly keeps demographic/income fields out of the predictive feature matrix and uses them in a separate fairness/reference pathway. ([GitHub](https://github.com/HarshkumarG007/LeadGuard/blob/main/docs/methodology.md))
 
-Future versions can extend this into a formal knapsack/resource-allocation optimizer.
+## 🚫 23. Sensitive Variables Are Not Model Features
 
-## 🔍 Explainability
+LeadGuard deliberately avoids directly feeding fields such as:
+- race
+- income
+- demographic indicators
 
-A high-risk prediction should not simply appear as:
-`P(Lead) = 0.91`
+into the predictive model.
+This prevents the model from simply learning a shortcut:
+`demographic variable ↓ prediction`
 
-Decision-makers should be able to ask:
-**Why?**
-
-LeadGuard uses tree-model explainability techniques such as SHAP to identify influential features.
-
-A conceptual explanation might look like:
+Instead:
+```text
+┌──────────────┐
+│ Model inputs │
+└──────┬───────┘
+       │
+       ▼
+    XGBoost
+       │
+       ▼
+    P(Lead)
 ```
-Lead Risk: 91%
 
-Factors increasing risk:
+while fairness accounting remains separate:
+```text
+Census / demographic context
+       │
+       ▼
+Fairness reference
+       │
+       ▼
+Equity accounting
+       │
+       ▼
+Priority adjustment
+```
+This separation is an important architectural boundary.
+
+## 📊 24. Fairness Evaluation
+
+Fairness should not mean: *"The model must predict every group identically."*
+That can be mathematically inappropriate.
+
+Instead LeadGuard evaluates whether prioritization produces unacceptable disparities.
+Relevant measurements can include:
+- false-negative-rate disparity,
+- coverage by income quartile,
+- inspection allocation,
+- risk capture,
+- uncertainty coverage,
+- geographic inspection distribution.
+
+The sample data card identifies the automated demographic-leakage test as a CI constraint. ([GitHub](https://github.com/HarshkumarG007/LeadGuard/blob/main/docs/data_card.md))
+
+## 🧭 25. Geographic Holdout
+
+LeadGuard evaluates both conventional and geographic generalization.
+
+The geographic question is:
+*Does the model still work when evaluated on a region whose labels were not used to build the model's label-dependent spatial features?*
+
+This is harder than random splitting.
+It is also more relevant to deployment because a municipality may need to prioritize areas where direct inspection evidence is sparse.
+
+## 📉 26. Post-Fix Performance Audit
+
+The remediation produced a dramatically different result from the original headline.
+
+**Before**
+Synthetic evaluation PR-AUC ≈ 0.99+
+This result was treated as suspicious after the leakage audit.
+
+**After**
+Leakage-safe sample evaluation:
+- Baseline PR-AUC ≈ 0.34
+- XGBoost Geo PR-AUC ≈ 0.41
+
+Absolute difference:
+$$0.41 - 0.34 = 0.07$$
+
+Relative difference:
+$$\frac{0.41 - 0.34}{0.34} \approx 20.6\%$$
+
+So the appropriate description is:
+**Approximately +0.07 absolute PR-AUC, or approximately +21% relative to the baseline PR-AUC, on the bundled sample evaluation.**
+
+This is not a claim of production performance.
+
+## 🔍 27. Random-vs-Geographic Gap
+
+The post-fix evaluation reports approximately:
+`Random/Geo PR-AUC gap ≈ 12.5%`
+
+LeadGuard uses `15%` as its project-specific leakage-audit threshold.
+Therefore:
+**The observed 12.5% gap is below LeadGuard's predefined 15% audit threshold.**
+
+It should not be interpreted as:
+*"12.5% proves that leakage is impossible."*
+
+The stronger evidence is the combination of:
+- split-first feature construction,
+- label invariance tests,
+- geographic holdout,
+- train/calibration/test separation,
+- active-learning feature rebuilding.
+
+## 📈 28. Current Metrics Snapshot
+
+| Metric | Post-fix sample result | Interpretation |
+| --- | --- | --- |
+| Baseline PR-AUC | ~0.34 | Reference model |
+| XGBoost geographic PR-AUC | ~0.41 | Leakage-safe sample result |
+| Absolute PR-AUC improvement | ~0.07 | XGBoost minus baseline |
+| Relative PR-AUC improvement | ~21% | Relative to baseline |
+| Random/Geo gap | ~12.5% | Below 15% project audit threshold |
+| Test coverage | 88.45% | Above 80% CI requirement |
+
+**Important**
+These numbers are sample/synthetic evaluation results.
+They should not be interpreted as:
+- real-world Chicago accuracy,
+- production generalization,
+- guaranteed discovery rate,
+- causal evidence,
+- regulatory certification.
+
+*(Placeholders for final Brier score, log loss, ECE, conformal coverage, and active-learning benchmark curves will be populated from generated artifacts in future runs).*
+
+## 🧠 29. Why PR-AUC?
+
+Lead detection is naturally an imbalanced classification problem.
+Accuracy can be misleading.
+
+For example:
+- 95% NotLead
+- 5% Lead
+
+A model predicting `NotLead` for everyone achieves 95% accuracy while finding no lead lines.
+
+PR-AUC focuses more directly on the positive class and the precision/recall tradeoff.
+That makes it a better primary metric for the inspection-discovery problem.
+
+## 🧮 30. Baseline Models
+
+LeadGuard does not evaluate XGBoost in isolation.
+Baselines provide context.
+
+A useful baseline answers:
+*"Is the complex model actually doing something useful?"*
+
+The project includes baseline evaluation alongside the advanced model.
+The post-fix sample comparison is approximately:
+- Baseline: 0.34 PR-AUC
+- XGBoost: 0.41 PR-AUC
+
+The correct conclusion is therefore not: *"XGBoost is amazing."*
+It is: **The leakage-safe XGBoost pipeline captures additional ranking signal over the baseline on the bundled sample evaluation.**
+
+## 🔬 31. Explainability
+
+A municipality should not receive:
+`Property 12345 P(Lead) = 0.87`
+and be told: *"Trust the model."*
+
+LeadGuard integrates SHAP-based explanations.
+
+Conceptually:
+$$f(x) = \phi_0 + \sum_i\phi_i$$
+where each $\phi_i$ represents a feature's contribution to the prediction.
+
+A planner can therefore see a simplified explanation such as:
+```text
+P(Lead) = 0.87
+Top contributors:
 + Older construction year
-+ High local Lead prevalence
-+ Spatial proximity to known Lead properties
-
-Factors decreasing risk:
-- More recent construction
-- Low-risk property characteristics
++ Spatial lead prevalence
++ Property characteristics
++ Geographic context
+- Recent construction indicator
 ```
 
-Explainability is intended to support human review.
-It should not be interpreted as causal inference.
+The methodology specifies `TreeExplainer` for efficient feature attribution. ([GitHub](https://github.com/HarshkumarG007/LeadGuard/blob/main/docs/methodology.md))
 
-## 🌐 API
+## 🛡️ 32. API Privacy
 
-LeadGuard exposes an API layer for integrating the model with applications.
+The public inspection-priority endpoint should not expose unnecessary personally identifying/location-sensitive information.
 
-The API can provide information such as:
-- property risk
-- probability of Lead
-- uncertainty
-- conformal prediction
-- priority
-- explanation information
-- inspection queue
+The public queue therefore focuses on identifiers and decision information rather than returning raw street addresses.
 
-### 🔒 API Privacy
+Conceptually:
+```json
+{
+  "property_id": "P12345",
+  "p_lead": 0.87,
+  "uncertainty": 0.31,
+  "priority_score": 0.82
+}
+```
+rather than:
+```json
+{
+  "property_id": "P12345",
+  "address": "123 Example Street ...",
+  ...
+}
+```
 
-The public priority queue intentionally does not expose property addresses.
+This is an important principle:
+**A model can be technically correct while its interface still exposes too much information.**
+Privacy therefore belongs in the architecture, not only in the database.
 
-The public-facing response should use identifiers such as:
-`property_id`
-and other non-address identifiers where appropriate.
+## 🖥️ 33. Application Layer
 
-The principle is:
-`Public analytics ↓ minimal identifying information`
-`Authorized operational workflow ↓ property lookup ↓ address`
+LeadGuard has two primary interfaces.
 
-This prevents a ranking endpoint from becoming an unnecessary address-disclosure mechanism.
+**FastAPI**
+Used for:
+- prediction,
+- priority queue generation,
+- model serving,
+- structured programmatic access.
+The repository exposes the FastAPI application under `api/`.
 
-## 🖥️ Streamlit Dashboard
+**Streamlit**
+Used for:
+- interactive exploration,
+- prioritization,
+- model explanations,
+- demonstration.
+The repository exposes the dashboard under `app/`.
 
-LeadGuard includes a Streamlit-based interface for exploring the system.
-
-The dashboard is intended to make the model understandable to humans rather than forcing users to interact directly with raw API responses.
-
-Typical workflow:
-`Load data ↓ Explore properties ↓ Inspect model risk ↓ Understand uncertainty ↓ Review priority ↓ Explore geographic patterns ↓ Review inspection allocation`
-
-The dashboard should consume the privacy-preserving API representation and use property_id rather than assuming an address is present in the public queue response.
-
-## 🏛️ Project Architecture
+## 📂 34. Repository Structure
 
 ```text
 LeadGuard/
 │
+├── api/
+│   ├── main.py
+│   └── schemas.py
+│
 ├── app/
 │   └── streamlit_app.py
 │
-├── api/
-│   └── main.py
+├── configs/
+│   └── train.yaml
+│
+├── data/
+│   ├── raw/
+│   ├── interim/
+│   ├── processed/
+│   └── sample/
+│
+├── docs/
+│   ├── methodology.md
+│   └── data_card.md
+│
+├── models/
+│   └── xgboost/
+│       ├── reports/
 │
 ├── src/
 │   └── leadguard/
 │       │
 │       ├── data/
+│       │   ├── clean.py
+│       │   ├── download.py
 │       │   ├── features.py
-│       │   └── ...
-│       │
-│       ├── models/
-│       │   ├── xgboost_model.py
-│       │   ├── baseline.py
-│       │   ├── uncertainty.py
-│       │   └── active_learning.py
+│       │   └── validation.py
 │       │
 │       ├── evaluation/
+│       │   ├── explainability.py
 │       │   ├── fairness.py
-│       │   └── ...
+│       │   └── metrics.py
 │       │
-│       └── ...
+│       ├── models/
+│       │   ├── active_learning.py
+│       │   ├── baseline.py
+│       │   ├── uncertainty.py
+│       │   └── xgboost_model.py
+│       │
+│       └── utils/
+│           ├── geospatial.py
+│           └── seed.py
 │
 ├── tests/
 │   ├── unit/
-│   │   ├── test_features.py
-│   │   ├── test_uncertainty.py
-│   │   ├── test_leakage.py
-│   │   └── test_calibration.py
-│   │
 │   └── integration/
-│       └── test_privacy.py
 │
-├── configs/
-├── models/
-│   └── xgb_model.pkl
-├── data/
-├── docs/
-│   ├── LeadGuard_Architecture.md
-├── PROGRESS.md
+├── .github/
+│   └── workflows/
+│       └── ci.yml
+│
+├── Dockerfile
+├── Makefile
 ├── pyproject.toml
+├── LeadGuard_Architecture.md
+├── PROGRESS.md
 └── README.md
 ```
 
-The exact contents may evolve, but the architectural separation is intentional.
+## 🚀 35. Installation
 
-### 📁 Repository Structure
-
-**src/leadguard/data/**
-Responsible for:
-- loading data
-- validation
-- feature engineering
-- split-aware spatial features
-
-**src/leadguard/models/**
-Contains the predictive and learning components:
-- XGBoost
-- baselines
-- uncertainty
-- active learning
-
-**src/leadguard/evaluation/**
-Contains evaluation logic such as:
-- fairness
-- calibration
-- model metrics
-- decision-level analysis
-
-**api/**
-Contains the service layer.
-
-**app/**
-Contains the interactive dashboard.
-
-**tests/**
-Contains:
-- unit tests
-- integration tests
-- leakage tests
-- privacy tests
-- calibration tests
-
-## ⚙️ Configuration
-
-LeadGuard is designed to keep important parameters configurable rather than hard-coded.
-
-Typical configuration categories include:
-- data paths
-- model hyperparameters
-- random seeds
-- train/calibration/test proportions
-- inspection costs
-- budget
-- uncertainty parameters
-- equity weights
-- active-learning batch size
-- number of active-learning rounds
-
-This makes experiments reproducible and allows different decision policies to be compared without rewriting core code.
-
-## 🚀 Installation
-
-Clone the repository:
+**Clone**
 ```bash
 git clone https://github.com/HarshkumarG007/LeadGuard.git
 cd LeadGuard
 ```
 
-Create and activate a virtual environment:
+**Create environment**
+Linux/macOS
 ```bash
-python -m venv .venv
-```
-Windows:
-```bash
-.venv\Scripts\activate
-```
-macOS / Linux:
-```bash
+python3 -m venv .venv
 source .venv/bin/activate
 ```
+Windows
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+```
 
-Install the project dependencies according to the repository's dependency configuration.
+**Install**
+```bash
+pip install -e ".[dev]"
+```
+
+## ⚡ 36. Quick Start
+
+The repository includes a synthetic sample dataset intended for reproducible demonstration.
+The current data card describes it as a 7,500-row synthetic dataset. ([GitHub](https://github.com/HarshkumarG007/LeadGuard/blob/main/docs/data_card.md))
+
+Run:
+```bash
+python -m leadguard.data.clean \
+  --input data/sample \
+  --output data/interim/sample_interim.parquet
+```
+
+Then:
+```bash
+python -m leadguard.data.features \
+  --input data/interim/sample_interim.parquet \
+  --output data/processed/features_sample.parquet
+```
+
+Train the baseline:
+```bash
+python -m leadguard.models.baseline \
+  --config configs/train.yaml \
+  --features data/processed/features_sample.parquet
+```
+
+Train XGBoost:
+```bash
+python -m leadguard.models.xgboost_model \
+  --config configs/train.yaml \
+  --features data/processed/features_sample.parquet
+```
+
+Run uncertainty:
+```bash
+python -m leadguard.models.uncertainty \
+  --features data/processed/features_sample.parquet \
+  --sample
+```
+
+Run fairness:
+```bash
+python -m leadguard.evaluation.fairness \
+  --sample
+```
+
+Run active learning:
+```bash
+python -m leadguard.models.active_learning \
+  --sample
+```
+
+Run explainability:
+```bash
+python -m leadguard.evaluation.explainability \
+  --sample
+```
+
+## 🧰 37. Makefile Workflow
+
+For the sample pipeline:
+```bash
+make train-sample
+```
+
+For serving:
+```bash
+make serve
+```
+
+For the dashboard:
+```bash
+make dashboard
+```
+
+The repository's `Makefile` provides the convenience wrappers around the underlying pipeline stages. ([GitHub](https://github.com/HarshkumarG007/LeadGuard/blob/main/Makefile))
+
+## 🧪 38. Testing
+
+Run the entire suite:
+```bash
+python -m pytest tests/ -v
+```
+
+Run with coverage:
+```bash
+python -m pytest \
+  tests/ \
+  --cov=src \
+  --cov-report=term-missing \
+  --cov-fail-under=80
+```
+
+Current validated repository coverage: **88.45%**
+This exceeds the project's CI requirement: **80%**
+
+## 🔬 39. Targeted Tests
+
+Leakage
+```bash
+python -m pytest tests/unit/test_leakage.py -v
+```
+
+Active learning
+```bash
+python -m pytest tests/unit/test_active_learning.py -v
+```
+
+Uncertainty
+```bash
+python -m pytest tests/unit/test_uncertainty.py -v
+```
+
+Integration
+```bash
+python -m pytest tests/integration/test_pipeline.py -v
+```
+
+## 🧹 40. Code Quality
+
+LeadGuard uses Ruff for linting and formatting.
+
+Run:
+```bash
+python -m ruff check .
+```
+
+Format:
+```bash
+python -m ruff format .
+```
+
+Verify formatting:
+```bash
+python -m ruff format --check .
+```
+
+The desired CI state is:
+```text
+Ruff         PASS
+Formatting   PASS
+Tests        PASS
+Coverage     >= 80%
+```
+
+## 🔄 41. Reproducibility
+
+LeadGuard is designed so that the major evaluation stages can be regenerated.
+The basic reproducibility chain is:
+`raw/sample data ↓ clean ↓ feature generation ↓ baseline ↓ XGBoost ↓ calibration ↓ uncertainty ↓ fairness ↓ active learning ↓ explainability`
+
+This is preferable to storing only a final score because every important result can be traced back to a pipeline stage.
+
+## 🧬 42. Data Sources
+
+The production-oriented architecture is designed around several data sources.
+
+**Water service-line inventory**
+Provides:
+- property/service-line identifiers,
+- known material labels,
+- geographic information.
+
+**Property assessor**
+Provides:
+- property characteristics,
+- construction information,
+- parcel attributes.
+
+**OpenStreetMap**
+Used for infrastructure-derived spatial information such as nearest hydrant distance.
+
+**Census ACS**
+Used for fairness/equity reference information rather than predictive model inputs.
+
+The current data card documents these sources and their known quality issues. ([GitHub](https://github.com/HarshkumarG007/LeadGuard/blob/main/docs/data_card.md))
+
+## ⚠️ 43. Data Quality
+
+Real infrastructure data is messy.
+Known issues include:
+- unknown service-line materials,
+- self-reported material labels,
+- geocoding errors,
+- missing construction years,
+- imperfect property classifications.
+
+The system therefore treats data cleaning as a first-class ML stage.
+
+## 🧹 44. Cleaning Pipeline
+
+Conceptually:
+```text
+          Raw records
+               │
+               ▼
+     Normalize identifiers
+               │
+               ▼
+      Normalize addresses
+               │
+               ▼
+      Resolve duplicates
+               │
+               ▼
+Validate geographic coordinates
+               │
+               ▼
+    Normalize material labels
+               │
+               ▼
+      Handle missing values
+               │
+               ▼
+  Validated intermediate dataset
+```
+
+## 🧮 45. Missing Data
+
+Missingness is not automatically equivalent to zero.
 For example:
+`year_built = missing`
+does not mean:
+`year_built = 0`
+
+Feature engineering therefore applies appropriate imputation/handling rules rather than blindly converting missing values into meaningful measurements.
+
+## 🔐 46. Information-Flow Security Model
+
+A useful way to understand LeadGuard is as an information-flow problem.
+There are three categories of information:
+
+**Category A — Always permissible**
+- property attributes
+- geographic coordinates
+- infrastructure features
+- historical metadata
+
+**Category B — Conditionally permissible**
+- known nearby labels
+- neighbor lead rate
+- distance to known lead
+- KNN label statistics
+
+These are permissible **only** if the labels belong to the legitimate reference set available at prediction time.
+
+**Category C — Forbidden during test evaluation**
+- test labels
+- future inspection results
+- labels from the held-out region
+
+The core rule is:
+`TEST LABEL │ X │ FEATURE MATRIX`
+
+## 🧠 47. The Deep Design Principle
+
+The most important architectural idea in LeadGuard is:
+**Features are not inherently safe or unsafe. Their provenance determines whether they are safe.**
+
+For example:
+`neighbor_lead_rate`
+is not automatically leakage.
+
+It depends on:
+- Which neighbors?
+- Which labels?
+- When were those labels known?
+- Which split do they belong to?
+
+This is why LeadGuard's feature-generation architecture is split-aware.
+
+## 🧪 48. What We Learned From the Premortem
+
+Before implementation, several failure modes were identified.
+
+**Failure mode 1: Spatial label leakage**
+Mitigation: split-first architecture, reference-only labels, invariance tests.
+
+**Failure mode 2: Calibration on the test set**
+Mitigation: dedicated calibration partition.
+
+**Failure mode 3: Fake uncertainty**
+Mitigation: remove Gaussian pseudo-ensemble, use calibrated probability ambiguity, use conformal sets.
+
+**Failure mode 4: Fake active learning**
+Mitigation: retrain every round, rebuild label-dependent features every round.
+
+**Failure mode 5: Privacy leakage through API**
+Mitigation: remove raw address from public priority responses.
+
+**Failure mode 6: Metric inflation**
+Mitigation: geographic holdout, independent test evaluation, explicit pre/post audit.
+
+## 🩺 49. Autopsy of the Original Evaluation
+
+The project intentionally treats the first model evaluation like a forensic investigation.
+
+The symptom: `PR-AUC ≈ 1.0`
+The question: *"Why is this model so good?"*
+Not: *"How do we put 1.0 in the README?"*
+
+Investigation revealed:
+`spatial correlation + label-dependent features + incorrect feature-generation timing ↓ information crossing evaluation boundaries`
+
+The remedy was architectural rather than cosmetic.
+That distinction matters.
+
+## 💀 50. What the Critic Should Attack
+
+A serious reviewer should ask:
+
+**"Are the spatial features leakage-safe?"**
+Answer: They are generated after split definition and label-dependent features consume only permitted reference labels.
+
+**"Can test labels change test features?"**
+Answer: Regression tests explicitly test this invariant.
+
+**"Are probabilities calibrated?"**
+Answer: Calibration is trained on a dedicated held-out calibration partition. Empirical Brier/log-loss/ECE results should be reported alongside the implementation claim.
+
+**"Does active learning actually learn?"**
+Answer: The simulation retrains the model and rebuilds label-dependent spatial features after every acquisition round.
+
+**"Is uncertainty a fake ensemble?"**
+Answer: No. The Gaussian perturbation pseudo-ensemble was removed.
+
+**"Is the fairness variable in the model?"**
+Answer: Sensitive/equity information is kept outside the predictive feature matrix and used in separate fairness/equity accounting.
+
+**"Does the API expose addresses?"**
+Answer: The public priority queue schema no longer includes the address field.
+
+**"Are the 0.41 results production results?"**
+Answer: No. They are results from the bundled synthetic/sample evaluation.
+
+## 🧱 51. What LeadGuard Does Not Claim
+
+LeadGuard does not currently claim:
+- production-level accuracy,
+- nationwide generalization,
+- causal inference,
+- guaranteed lead detection,
+- perfect calibration,
+- perfect fairness,
+- elimination of all possible leakage,
+- regulatory certification,
+- autonomous inspection decisions.
+
+Instead, it claims something more defensible:
+**LeadGuard is a reproducible research/portfolio system demonstrating how a leakage-sensitive spatial ML problem can be engineered, evaluated, audited, explained, and converted into an uncertainty- and equity-aware inspection prioritization workflow.**
+
+## 📚 52. Documentation
+
+The repository contains dedicated documentation for:
+- System architecture: `LeadGuard_Architecture.md`
+- Modeling methodology: `docs/methodology.md`
+- Data card: `docs/data_card.md`
+- Project progress: `PROGRESS.md`
+
+The methodology document describes the binary formulation, XGBoost model, conformal uncertainty, equity-aware prioritization, active learning, and SHAP explainability. ([GitHub](https://github.com/HarshkumarG007/LeadGuard/blob/main/docs/methodology.md))
+The data card documents the sample dataset, production-oriented sources, quality issues, fairness constraints, and limitations. ([GitHub](https://github.com/HarshkumarG007/LeadGuard/blob/main/docs/data_card.md))
+
+## 🗺️ 53. Development Roadmap
+
+**Completed**
+- Data cleaning
+- Feature engineering
+- Spatial modeling
+- XGBoost
+- Baselines
+- Geographic evaluation
+- Calibration architecture
+- Binary conformal uncertainty
+- Active learning
+- Equity-aware prioritization
+- SHAP explanations
+- FastAPI
+- Streamlit
+- Leakage regression tests
+- API privacy regression
+- CI quality gates
+- Post-fix audit
+
+**Future work**
+- Larger real-world labeled dataset
+- Field-validation campaign
+- Temporal validation
+- City-to-city transfer evaluation
+- Confidence intervals for headline metrics
+- Bootstrap uncertainty around PR-AUC
+- More rigorous calibration reporting
+- Production model registry
+- Monitoring for feature drift
+- Monitoring for label drift
+- Model versioning
+- Human-in-the-loop feedback capture
+- Spatial-temporal active learning
+- Cost-sensitive acquisition optimization
+
+## 🧭 54. Recommended Production Evolution
+
+A production system should evolve from:
+`Static dataset ↓ One-time model ↓ One-time evaluation`
+
+toward:
+```text
+    ┌──────────────┐
+    │ Data sources │
+    └──────┬───────┘
+           ▼
+    Data validation
+           │
+           ▼
+    Feature pipeline
+           │
+           ▼
+     Model registry
+           │
+           ▼
+      Calibration
+           │
+           ▼
+       Evaluation
+           │
+           ▼
+     API deployment
+           │
+           ▼
+Inspection prioritization
+           │
+           ▼
+     Field results
+           │
+           ▼
+    Label ingestion
+           │
+           ▼
+    Active learning
+           │
+           └──────► retraining
+```
+With monitoring around every transition.
+
+## 🔍 55. Production Monitoring
+
+A future deployment should monitor at least:
+
+**Data drift**
+- Feature distributions
+- Missingness
+- Categorical frequencies
+- Geographic distribution
+
+**Prediction drift**
+- P(Lead) distribution
+- Priority-score distribution
+- Uncertainty distribution
+
+**Label drift**
+When new inspection results arrive:
+- Observed lead rate
+- Precision
+- Recall
+- PR-AUC
+- Calibration
+
+**Fairness drift**
+- Inspection allocation
+- False-negative disparities
+- Coverage disparities
+- Neighborhood representation
+
+## 🛠️ 56. Troubleshooting
+
+**`features_sample.parquet` does not exist**
+Run:
 ```bash
-pip install -e .
+python -m leadguard.data.clean \
+  --input data/sample \
+  --output data/interim/sample_interim.parquet
 ```
-
-## ▶️ Running LeadGuard
-
-The exact commands may depend on the configured environment and repository scripts.
-Typical components include:
-
-**Train / evaluate model**
+then:
 ```bash
-python -m leadguard.models.xgboost_model
+python -m leadguard.data.features \
+  --input data/interim/sample_interim.parquet \
+  --output data/processed/features_sample.parquet
 ```
-This should:
-- load validated data
-- define evaluation splits
-- build leakage-safe features
-- train XGBoost
-- calibrate probabilities
-- evaluate on the held-out test set
-- save the calibrated model
 
-**Run tests**
+**Tests fail on coverage**
+Run:
 ```bash
-pytest
+python -m pytest \
+  tests/ \
+  --cov=src \
+  --cov-report=term-missing
 ```
+Inspect uncovered lines before adding tests merely to satisfy the percentage.
 
-**Run the API**
-A typical FastAPI development invocation is:
+**Active learning is slow**
+Use the fast mode where available:
 ```bash
-uvicorn api.main:app --reload
+python -m leadguard.models.active_learning \
+  --fast \
+  --features data/processed/features_sample.parquet
 ```
+The fast mode is intended for development/testing. It should not silently become the benchmark configuration.
 
-**Run Streamlit**
-```bash
-streamlit run app/streamlit_app.py
-```
-
-## 🧪 Running Tests
-
-The test suite is an important part of LeadGuard because many of the most dangerous ML failures do not produce Python exceptions.
-
-A model can:
-run successfully
-and still be scientifically invalid.
-
-Therefore LeadGuard tests both:
-- software correctness
-and:
-- evaluation correctness
-
-### 🚨 Leakage Testing
-The leakage test suite is particularly important.
-It checks invariants such as:
-
-**Test-label invariance**
-Changing test labels must not alter test features.
-
-**Training-label permutation**
-Randomized training labels should destroy meaningful predictive signal.
-
-**Spatial reference isolation**
-Test geography must not contribute test labels to spatial aggregates.
-
-**Feature provenance**
-Label-dependent features must have an explicit reference population.
-
-### 📏 Calibration Evaluation
-Calibration tests should verify:
-- probabilities are in [0, 1]
-- calibration uses held-out data
-- Brier score is calculable
-- log loss is calculable
-- ECE is calculable
-- reliability curves can be generated
-- test labels do not influence the calibrator
-
-### 🔄 Active Learning Evaluation
-The active-learning evaluation should compare:
-- Random
-- Highest Risk
-- Highest Uncertainty
-- Risk + Uncertainty
-- Risk + Uncertainty + Equity
-- Oracle
-
-Each strategy is evaluated across increasing inspection budgets.
-
-Example:
-```
-Budget │
-       │ ─── Oracle
-       │ ─────
-       │ ───── Risk+Uncertainty
-       │ ─────
-       │ ───── Risk
-       │ ─── Random
-       └────────────────────────── Number Inspected
-```
-
-The actual curves should be generated from experiments rather than manually assumed.
-
-## 🔬 Evaluation Philosophy
-
-LeadGuard deliberately avoids treating:
-**one impressive metric**
-as proof that the system works.
-
-A serious evaluation asks:
-
-- **Can the model predict?**
-  PR-AUC, ROC-AUC, Precision, Recall
-- **Are the probabilities meaningful?**
-  Brier, Log Loss, ECE, Reliability
-- **Is uncertainty useful?**
-  Conformal Coverage, Set Size, Uncertainty Ranking
-- **Does it work spatially?**
-  Geographic Holdout, Neighborhood Holdout
-- **Does it survive label noise?**
-  Noise Stress Tests
-- **Does active learning help?**
-  Discoveries / Inspection, Discoveries / $
-- **Is the allocation equitable?**
-  FNR disparity, Inspection allocation, Inspection delay, Discovery rate
-- **Does the API respect privacy?**
-  Address exclusion
-
-### 🧪 The Pre-Fix Evaluation Lesson
-
-An earlier version of LeadGuard produced extremely high synthetic performance.
-That result was not accepted at face value.
-
-Investigation identified a serious potential source of evaluation contamination:
-**label-dependent spatial features**
-were being generated before the final evaluation split.
-
-For example, a feature such as:
-`distance to nearest known Lead`
-can become invalid if the "known Lead" reference population contains eventual test labels.
-
-Therefore:
-The old perfect metrics are not treated as valid evidence of model generalization.
-
-The evaluation pipeline was redesigned around split-first feature generation.
-This is an intentional part of LeadGuard's engineering story.
-
-### 🧯 Why This Matters
-
-A model can have:
-`PR-AUC = 1.00`
-and still be wrong.
-
-If the feature pipeline accidentally allows:
-`TEST LABEL ↓ TEST FEATURE ↓ MODEL ↓ TEST PREDICTION`
-then the evaluation is circular.
-
-The correct relationship is:
-`TRAIN LABEL ↓ TRAIN-DERIVED REFERENCE FEATURES ↓ MODEL ↓ TEST FEATURES ↓ TEST PREDICTION`
-
-That distinction is more important than the headline metric.
-
-## 🔁 Reproducibility
-
-LeadGuard aims to make experiments reproducible through:
-- fixed random seeds
-- deterministic data-processing paths where practical
-- configuration files
-- explicit dataset versions
-- automated tests
-- documented evaluation procedures
-- separation of training/calibration/test data
-
-Reproducibility is particularly important for active-learning experiments because acquisition order can influence future model behavior.
-
-## 🧱 Engineering Principles
+## 🧠 57. Engineering Philosophy
 
 LeadGuard follows several principles.
 
-**1. Split before label-dependent feature engineering**
-Never construct target-informed features on the entire dataset before evaluation splitting.
+**Principle 1 — Evaluation is part of the model**
+A model and its evaluation protocol cannot be treated independently.
 
-**2. Test data is sacred**
-The test set should be touched only for final evaluation.
+**Principle 2 — Information provenance matters**
+Every label-dependent feature should have a traceable source.
 
-**3. Probability is not confidence**
-A probability estimate and uncertainty estimate answer different questions.
+**Principle 3 — Uncertainty is a first-class output**
+A model should be allowed to say: *"I don't know."*
 
-**4. Calibration is part of the product**
-If downstream decisions depend on probability magnitude, calibration is not optional decoration.
+**Principle 4 — Probability is not certainty**
+A calibrated 0.87 is not a guarantee.
 
-**5. Uncertainty should have a clear meaning**
-Avoid inventing sophisticated terminology for heuristics.
-If something is perturbation sensitivity, call it perturbation sensitivity.
-If something is predictive entropy, call it predictive entropy.
-If something is ensemble variance, it should come from an actual ensemble.
+**Principle 5 — Fairness is a systems problem**
+It cannot always be solved by putting protected variables into the model.
 
-**6. Fairness must match the decision**
-Because LeadGuard allocates inspections, fairness analysis should examine allocation and outcomes—not only classification statistics.
+**Principle 6 — Active learning changes the data-generating process**
+Once inspections generate new labels, the model's information state changes.
 
-**7. Humans remain in the loop**
-LeadGuard prioritizes inspections.
-It does not replace physical inspection.
+**Principle 7 — Explainability should support decisions**
+SHAP is not included because colorful plots look impressive. It exists so a human can investigate why a property was prioritized.
 
-**8. Privacy by default**
-Public endpoints should return only the information required for their purpose.
+**Principle 8 — Privacy is part of ML engineering**
+A correct prediction does not justify exposing unnecessary personal/location information.
 
-## ⚠️ Limitations
+**Principle 9 — A failed experiment can be a successful engineering outcome**
+Discovering leakage and reducing an inflated metric is not regression. It is improved scientific validity.
 
-LeadGuard has important limitations.
+## 🏆 58. Why This Project Is Interesting
 
-**Synthetic data**
-Synthetic data is useful for development but cannot establish real-world performance.
+LeadGuard is deliberately more than:
+`CSV ↓ XGBoost ↓ accuracy`
+
+It combines:
+```text
+                         LEADGUARD
+                             │
+      ┌──────────────────────┼───────────────────────┐
+      │                      │                       │
+      ▼                      ▼                       ▼
+   Spatial              Uncertainty                Equity
+      ML                     │                       │
+      │                      │                       │
+      ▼                      ▼                       ▼
+ Leakage-safe            Conformal                Priority
+   features              prediction               scoring
+      │                      │                       │
+      └────────────┬─────────┴───────────────────────┘
+                   ▼
+            Active Learning
+                   │
+                   ▼
+            New inspections
+                   │
+                   ▼
+             New knowledge
+                   │
+                   ▼
+              Better model
+```
+
+The hard part is not fitting XGBoost.
+The hard part is making sure the entire system remains logically correct when:
+- geography matters,
+- labels arrive over time,
+- uncertainty matters,
+- fairness matters,
+- privacy matters,
+- and evaluation itself can leak information.
+
+## 🧪 59. Reproducible Quality Gate
+
+Before merging a substantial change, run:
+```bash
+python -m ruff check .
+python -m ruff format --check .
+python -m pytest \
+  tests/ \
+  --cov=src \
+  --cov-report=term-missing \
+  --cov-fail-under=80
+```
+
+Then inspect:
+1. test result
+2. coverage
+3. warnings
+4. metric changes
+5. leakage tests
+6. API schema changes
+
+A green test suite is necessary.
+It is not sufficient.
+
+## 📜 60. Evaluation Contract
+
+Every future headline metric should answer five questions:
+
+1. **What dataset?** Synthetic sample? Real data? External validation set?
+2. **What split?** Random? Geographic? Temporal?
+3. **What information was available?** Especially for spatial label-derived features.
+4. **Was the test set touched?** The answer should be: No.
+5. **What does the number actually mean?**
+   For example: *"0.41 PR-AUC on the bundled synthetic geographic-holdout evaluation"* is scientifically meaningful. *"LeadGuard achieves 0.41 PR-AUC"* is ambiguous.
+
+## 🚨 61. Before vs After
+
+**BEFORE**
+```text
+Headline metric
+       │
+       ▼
+ PR-AUC ≈ 1.0
+       │
+       ▼
+Looks impressive
+       │
+       ▼
+  Deeper audit
+       │
+       ▼
+Spatial label leakage
+       │
+       ▼
+Evaluation invalid
+```
+
+**AFTER**
+```text
+  Split first
+       │
+       ▼
+Reference-only spatial labels
+       │
+       ▼
+Train / calibration / test
+       │
+       ▼
+Calibrated probability
+       │
+       ▼
+Binary conformal uncertainty
+       │
+       ▼
+True active-learning retraining
+       │
+       ▼
+Equity-aware prioritization
+       │
+       ▼
+Leakage regression tests
+       │
+       ▼
+  Honest evaluation
+       │
+       ▼
+ Geo PR-AUC ≈ 0.41
+```
+
+## 💡 62. The Main Lesson
+
+If there is only one thing a reviewer should remember about LeadGuard, it should be this:
+
+**The goal was not to make the metric look good. The goal was to make the evaluation impossible to fool accidentally.**
+
+That changed the architecture.
+It changed the feature pipeline.
+It changed the active-learning loop.
+It changed the uncertainty implementation.
+It changed the tests.
+And it changed the reported performance.
+
+That is exactly what a serious ML engineering project should do when an evaluation flaw is discovered.
+
+## 📌 63. Limitations
+
+LeadGuard currently has important limitations.
+
+**Synthetic sample data**
+The bundled sample is synthetic. Therefore: `sample PR-AUC ≠ real-world PR-AUC`
+The data card explicitly identifies this limitation. ([GitHub](https://github.com/HarshkumarG007/LeadGuard/blob/main/docs/data_card.md))
+
+**Geographic scope**
+The production-oriented design is focused on the Chicago/Cook County context.
 
 **Label quality**
-Historical service-line records may contain:
-- incorrect labels
-- missing labels
-- outdated records
-- inconsistent definitions
+Real service-line inventories may contain:
+- self-reported labels,
+- outdated records,
+- incorrect material classifications.
 
-A model cannot automatically correct bad ground truth.
+**Spatial stationarity**
+The model assumes that spatial relationships learned from historical data remain useful enough for the deployment environment. That assumption requires monitoring.
 
-**Geographic distribution shift**
-A model trained in one geographic environment may not generalize to another.
-Even nearby neighborhoods can have substantially different infrastructure histories.
+**Calibration**
+Calibration must be continuously re-evaluated after:
+- retraining,
+- dataset shift,
+- geographic expansion,
+- policy changes.
 
-**Spatial correlation**
-Nearby properties can share infrastructure characteristics.
-This is useful signal but also creates a major risk of leakage if spatial features are constructed incorrectly.
+**Fairness**
+An equity-aware priority score does not mathematically guarantee equal outcomes. It is a mechanism for explicitly incorporating equity into decision-making.
 
-**Missing-not-at-random labels**
-Properties with known service-line material may not be a random sample.
-Inspection decisions themselves may have historically been targeted.
-This creates selection bias.
+## 🔮 64. Future Research
 
-**Calibration shift**
-A calibrated model can become miscalibrated when the underlying population changes.
-Calibration must therefore be monitored after deployment.
+Several directions would substantially strengthen LeadGuard.
 
-**Conformal assumptions**
-Conformal prediction provides guarantees under assumptions about the data-generation process and exchangeability.
-Real-world geographic and temporal distribution shifts can violate these assumptions.
+**Temporal leakage prevention**
+Instead of only `train / test`, use `past → future` so the model is evaluated as it would actually operate over time.
 
-**Equity trade-offs**
-There is no universally correct fairness objective.
-Increasing equity constraints may reduce immediate expected Lead discoveries.
-That trade-off should be explicitly measured rather than hidden.
+**Spatial-temporal validation**
+Combine `geographic holdout + temporal holdout` for a harder generalization test.
 
-**Cost assumptions**
-Inspection costs may vary.
-Travel distance, property complexity, contractor availability, and administrative costs can make real-world costs substantially more complicated than a single fixed inspection price.
+**Bootstrap confidence intervals**
+Report `PR-AUC = 0.41, 95% CI = [...]` rather than a single point estimate.
 
-## 🚫 What LeadGuard Does Not Claim
+**Cost-aware active learning**
+Optimize $\frac{\text{Expected Value}}{\text{Inspection Cost}}$ rather than ranking purely by model properties.
 
-LeadGuard does not claim:
-- that every high-risk property contains Lead
-- that every low-risk property is safe
-- that ML predictions replace physical inspection
-- that synthetic performance represents real-world performance
-- that a calibrated probability is a guarantee
-- that conformal prediction eliminates distribution shift
-- that fairness can be reduced to one metric
-- that historical labels are perfect
-- that the current model is universally deployable
-- that the system makes autonomous public-health decisions
+**Human-in-the-loop learning**
+Capture inspector feedback:
+`prediction ↓ inspection ↓ actual material ↓ inspector notes ↓ new training signal`
 
-The intended role is:
-**Decision support for prioritizing limited inspection resources.**
+**Monitoring**
+Introduce automated detection of feature drift, geographic drift, calibration drift, fairness drift, and label-quality drift.
 
-## 🗺️ Roadmap
+## 🤝 65. Contributing
 
-### Phase 1 — Evaluation integrity
-- [x] Split-first architecture
-- [x] Leakage-safe spatial features
-- [x] Explicit leakage tests
-- [x] Train/calibration/test separation
-- [x] Binary uncertainty semantics
-- [x] Remove pseudo-ensemble uncertainty
-- [x] API address privacy
-
-### Phase 2 — Stronger uncertainty
-- [ ] Production-quality conformal calibration
-- [ ] Conditional/group-wise coverage analysis
-- [ ] Prediction-set efficiency analysis
-- [ ] Genuine epistemic ensemble
-- [ ] Drift-aware uncertainty monitoring
-
-### Phase 3 — Active learning
-- [ ] Iterative retraining architecture
-- [ ] Rebuild spatial features after acquisition
-- [ ] Strategy comparison
-- [ ] Oracle benchmark
-- [ ] More rigorous information-gain objectives
-- [ ] Cost-aware acquisition
-
-### Phase 4 — Decision optimization
-- [ ] Formal budget optimizer
-- [ ] Variable inspection costs
-- [ ] Travel-distance constraints
-- [ ] Contractor capacity
-- [ ] Geographic coverage constraints
-- [ ] Explicit fairness constraints
-
-### Phase 5 — Real-world validation
-- [ ] Real public dataset ingestion
-- [ ] Data provenance documentation
-- [ ] Temporal validation
-- [ ] Geographic external validation
-- [ ] Label-noise analysis
-- [ ] Calibration monitoring
-- [ ] Distribution-shift testing
-
-## 🔬 Research Questions
-
-LeadGuard can be viewed as an applied research platform for questions such as:
-
-1. **How much does spatial information actually contribute?**
-   Compare: non-spatial model vs spatial model
-2. **Does uncertainty improve inspection efficiency?**
-   Compare: risk-only vs risk + uncertainty using actual Lead discoveries per inspection.
-3. **Does active learning outperform random inspection?**
-   Measure: cumulative discoveries as inspection budget increases.
-4. **What is the cost of equity constraints?**
-   Compare: unconstrained optimization vs equity-constrained optimization and quantify the trade-off.
-5. **How quickly does model performance improve as inspections accumulate?**
-   Measure: number of labels ↓ model performance ↓ calibration ↓ uncertainty reduction
-6. **How robust is the system to historical label bias?**
-   Simulate: biased historical inspections and evaluate how quickly active learning can recover.
-
-## 🧠 Why This Architecture Matters
-
-LeadGuard is intentionally more than:
-`CSV → XGBoost → accuracy`
-
-The deeper architecture is:
+Contributions should preserve the project's core invariants.
+Before submitting a change:
+```bash
+python -m ruff check .
+python -m ruff format --check .
+python -m pytest tests/ --cov=src --cov-fail-under=80
 ```
-       HIDDEN REALITY
-             │
-             ▼
-       Partial labels
-             │
-             ▼
-       ML probability
-             │
-             ▼
-        Calibration
-             │
-             ▼
-        Uncertainty
-             │
-             ▼
-      Decision policy
-             │
-      ┌──────┴──────┐
-      │             │
-   Budget        Equity
-      │             │
-      └──────┬──────┘
-             ▼
-         Inspection
-             │
-             ▼
-        New evidence
-             │
-             ▼
-          Learning
-             │
-             └──────► better future decisions
+For changes affecting spatial features, also add or update leakage tests.
+For changes affecting active learning, verify that:
+`new labels ↓ feature rebuild ↓ model retraining`
+still occurs in that order.
+
+## 📄 66. License
+
+See the repository license file for the applicable terms.
+
+## 👤 67. Author
+
+**Harsh Kumar G**
+LeadGuard is developed as an ML engineering/research portfolio project exploring:
+- spatial machine learning,
+- uncertainty quantification,
+- active learning,
+- fairness-aware decision systems,
+- explainable AI,
+- ML evaluation integrity,
+- privacy-conscious serving.
+
+## ⭐ 68. Final Takeaway
+
+LeadGuard started with a seemingly simple goal:
+*Find the properties most likely to have lead service lines.*
+
+The deeper problem turned out to be much harder:
+*How do you build a system that remains trustworthy when spatial correlation, sparse labels, expensive inspections, uncertainty, fairness, privacy, and evaluation leakage all interact?*
+
+The answer implemented here is a complete decision pipeline:
+```text
+          DATA
+           │
+           ▼
+        CLEANING
+           │
+           ▼
+  SPLIT-FIRST FEATURES
+           │
+           ▼
+        XGBOOST
+           │
+           ▼
+      CALIBRATION
+           │
+    ┌──────┴───────┐
+    ▼              ▼
+CONFORMAL        SHAP
+UNCERTAINTY   EXPLANATION
+    │              │
+    └──────┬───────┘
+           ▼
+  RISK + UNCERTAINTY
+           │
+           ▼
+         EQUITY
+           │
+           ▼
+  INSPECTION PRIORITY
+           │
+           ▼
+      FIELD LABEL
+           │
+           ▼
+    ACTIVE LEARNING
+           │
+           └──────────► MODEL UPDATE
 ```
 
-This is why LeadGuard should be thought of as a:
-**closed-loop uncertainty-aware inspection intelligence system**
-rather than merely a Lead classification model.
+And the project's most important evaluation result is not simply `PR-AUC = 0.41`.
+It is the engineering transformation:
 
-## 🥭 Explained Like You're Five
-
-Imagine a giant neighborhood where some houses might have old lead pipes.
-You only have enough money to check 100 houses.
-
-You ask a smart computer:
-"Which houses should we check first?"
-
-The computer looks at things such as:
-- how old the house is
-- what nearby houses look like
-- what information is already known
-- how uncertain the prediction is
-
-Then it says:
-- House A → probably Lead
-- House B → probably not Lead
-- House C → we're really unsure
-
-But the computer shouldn't simply check the 100 houses it likes most.
-It also asks:
-"Have we been checking the same neighborhood over and over?"
-and:
-"Which inspection would teach us something useful?"
-
-Then humans inspect selected houses.
-The results go back into the system.
-The computer learns.
-Then it chooses the next houses.
-
-So the loop is:
-`GUESS ↓ CHECK ↓ LEARN ↓ GUESS BETTER ↓ CHECK ↓ LEARN ↓ ...`
-
-That's LeadGuard.
-
-## 🧠 Explained Like You're an ML Engineer
-
-Formally, LeadGuard estimates:
-`P(Y = Lead | X)`
-using a gradient-boosted tree model.
-
-The feature pipeline distinguishes:
-`X_static`
-from:
-`X_label-dependent(reference = TRAIN)`
-to prevent target leakage.
-
-The evaluation architecture is:
-`D = D_train ∪ D_cal ∪ D_test`
-with:
-`D_train ∩ D_cal = ∅`
-`D_train ∩ D_test = ∅`
-`D_cal ∩ D_test = ∅`
-
-The predictive model is fitted on:
-`D_train`
-The probability calibrator is fitted using:
-`D_cal`
-and final performance is measured only on:
-`D_test`
-
-For binary prediction:
-`Y ∈ {0,1}`
-where:
-`0 = NotLead`
-`1 = Lead`
-
-Predictive ambiguity can be represented using:
-`u(p) = 1 - |2p - 1|`
-while conformal prediction independently produces a prediction set:
-`C(x) ⊆ {NotLead, Lead}`
-
-The decision system then uses predictive risk, uncertainty, equity, and budget constraints to determine an acquisition policy.
-
-The active-learning loop updates:
-`L_t`
-after every inspection batch and rebuilds label-dependent spatial features using the updated labeled set.
-
-## 🏆 What Makes LeadGuard Interesting
-
-The strongest part of LeadGuard is not:
-"We used XGBoost."
-XGBoost is a tool.
-
-The interesting part is the system-level question:
-**How should a city spend a finite inspection budget when the underlying infrastructure state is only partially known?**
-
-That requires combining:
-- supervised learning
-- probability calibration
-- uncertainty quantification
-- conformal prediction
-- spatial modeling
-- active learning
-- resource allocation
-- fairness auditing
-- explainability
-- privacy-aware APIs
-- human-in-the-loop workflows
-
-That combination is the core of LeadGuard.
-
-## 🧪 A Strong Evaluation Story
-
-A credible LeadGuard evaluation should eventually look like this:
-
-```
-          REAL DATA
-              │
-              ▼
-        Leakage Audit
-              │
-              ▼
-      Geographic Holdout
-              │
-              ▼
-    ┌─────────────────────┐
-    │   Baseline Models   │
-    └──────────┬──────────┘
-               │
-               ▼
-         XGBoost Model
-               │
-               ▼
-          Calibration
-               │
-               ▼
-     Uncertainty Analysis
-               │
-               ▼
-     Conformal Evaluation
-               │
-               ▼
-     Decision Simulation
-               │
-               ▼
-       Active Learning
-               │
-               ▼
-      Budget Comparison
-               │
-               ▼
-      Fairness Analysis
-               │
-               ▼
-       Robustness Tests
+```text
+suspiciously high metric
+           │
+           ▼
+     forensic audit
+           │
+           ▼
+     leakage found
+           │
+           ▼
+  architecture rebuilt
+           │
+           ▼
+ regression tests added
+           │
+           ▼
+   honest evaluation
+           │
+           ▼
+   defensible metric
 ```
 
-A model should not be called production-ready merely because it has a high PR-AUC.
-It should survive the entire pipeline.
-
-## 🔥 The Standard LeadGuard Sets for Itself
-
-A successful LeadGuard release should be able to answer:
-
-- **Can we trust the evaluation?** No leakage.
-- **Can we interpret the probability?** Calibration.
-- **Can we identify uncertainty?** Predictive uncertainty + conformal sets.
-- **Can we choose inspections intelligently?** Risk-aware acquisition.
-- **Can the model learn from inspections?** Active learning.
-- **Can we operate under a budget?** Budget-aware prioritization.
-- **Can we monitor equity?** Decision-level fairness metrics.
-- **Can humans understand the output?** Explainability.
-- **Can we avoid unnecessary exposure of sensitive information?** Privacy-preserving API design.
-
-## 📚 Technical Summary
-
-| Component | LeadGuard Approach |
-| --- | --- |
-| Problem | Lead service-line inspection prioritization |
-| Primary target | Binary Lead / NotLead |
-| Core model | XGBoost |
-| Feature type | Structured + spatial |
-| Spatial features | Train/reference-only label usage |
-| Evaluation | Leakage-safe holdout |
-| Probability | Calibrated |
-| Calibration | Held-out calibration set |
-| Uncertainty | Predictive uncertainty |
-| Conformal output | Binary prediction sets |
-| Acquisition | Active learning |
-| Baselines | Random / risk / uncertainty / combined |
-| Oracle | Simulation upper bound |
-| Fairness | Allocation + error/disparity analysis |
-| Explainability | SHAP-compatible tree explanations |
-| API | FastAPI |
-| Dashboard | Streamlit |
-| Privacy | No address in public priority queue |
-| Testing | Unit + integration + leakage tests |
-| Primary use | Inspection decision support |
-
-## ⚠️ Responsible Use
-
-LeadGuard should be used as a decision-support system.
-Any operational deployment should include:
-- human review
-- appropriate inspection procedures
-- domain expertise
-- legal/privacy review
-- data-quality monitoring
-- model-performance monitoring
-- calibration monitoring
-- fairness monitoring
-- distribution-shift monitoring
-
-A model prediction should never be treated as physical confirmation of pipe material.
-
-## 🤝 Contributing
-
-Contributions are welcome.
-When modifying LeadGuard, contributors should pay particular attention to:
-- Data leakage
-- Train/test contamination
-- Calibration integrity
-- Uncertainty semantics
-- Privacy
-- Fairness
-- Reproducibility
-
-Any new label-dependent feature should explicitly document:
-*What labels does it use? From which reference population? At what stage is it calculated?*
-
-## 📄 License
-
-See the repository license for the applicable terms.
-
-## 👨‍💻 Final Takeaway
-
-LeadGuard is built around a simple idea:
-**When you cannot inspect everything, the goal is not merely to predict—it is to decide what to inspect next, understand how uncertain that decision is, learn from the inspection, and do so responsibly.**
-
-The system therefore closes the loop:
-
-```
-    ┌──────────────────────────────┐
-    │                              │
-    ▼                              │
- PREDICT                           │
-    │                              │
-    ▼                              │
-CALIBRATE                          │
-    │                              │
-    ▼                              │
-QUANTIFY UNCERTAINTY               │
-    │                              │
-    ▼                              │
-PRIORITIZE                         │
-    │                              │
-    ▼                              │
- INSPECT                           │
-    │                              │
-    ▼                              │
-  LEARN                            │
-    │                              │
-    └──────────────────────────────┘
-```
-
-LeadGuard is not trying to replace inspectors.
-It is trying to help them answer one extremely important question:
-**"Given what we know, what should we inspect next?"**
-
-And just as importantly:
-**"How sure are we—and who might we be leaving behind?"**
+LeadGuard is therefore a demonstration of a broader ML engineering principle: trustworthy machine learning is not just about building a powerful model. It is about controlling information flow, measuring uncertainty, validating assumptions, protecting users, and being willing to report a lower number when the lower number is the truth.

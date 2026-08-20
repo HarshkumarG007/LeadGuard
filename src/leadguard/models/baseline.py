@@ -267,7 +267,7 @@ def train_baselines(
 
     # Write metrics
     write_metrics(all_metrics, reports_dir / "baseline_metrics.json")
-    logger.info("Phase 3 PASS — RF geo PR-AUC: %.4f", m_geo_rf["pr_auc"])
+    logger.info("Phase 3 PASS — RF geo PR-AUC: %.4f", m_geo_rf["test_geo_pr_auc"])
     return all_metrics
 
 

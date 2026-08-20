@@ -48,8 +48,11 @@ def test_test_labels_cannot_affect_test_features():
         test_df_randomized, reference_df=train_df, include_label_dependent=True
     )
 
-    # Assert features are identical
-    pd.testing.assert_frame_equal(test_features_baseline, test_features_randomized)
+    # Assert features are identical (ignoring the label column itself)
+    pd.testing.assert_frame_equal(
+        test_features_baseline.drop(columns=["service_line_material"]),
+        test_features_randomized.drop(columns=["service_line_material"]),
+    )
 
 
 def test_spatial_features_use_training_labels_only():
@@ -78,9 +81,12 @@ def test_spatial_features_use_training_labels_only():
         test_df_modified, reference_df=train_df, include_label_dependent=True
     )
 
-    # Features must be completely unchanged
+    # Features must be completely unchanged (ignoring the label column itself on the test set)
     pd.testing.assert_frame_equal(train_features_baseline, train_features_modified)
-    pd.testing.assert_frame_equal(test_features_baseline, test_features_modified)
+    pd.testing.assert_frame_equal(
+        test_features_baseline.drop(columns=["service_line_material"]),
+        test_features_modified.drop(columns=["service_line_material"]),
+    )
 
 
 def test_label_permutation_collapses_performance():

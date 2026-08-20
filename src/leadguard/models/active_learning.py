@@ -190,7 +190,8 @@ def simulate_active_learning(
                 equity_boost = np.zeros(len(test_idx))
                 if not fairness_ref.empty and "census_tract" in test_df.columns:
                     test_with_tract = test_df.merge(fairness_ref, on="census_tract", how="left")
-                    equity_boost = compute_equity_boost(test_with_tract)
+                    test_with_tract["p_lead_calibrated"] = proba_test
+                    equity_boost = compute_equity_boost(test_with_tract, labeled)
 
                 scores = compute_priority_score(
                     p_lead=proba_test,

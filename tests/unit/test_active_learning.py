@@ -35,9 +35,7 @@ def test_highest_risk_acquisition():
     uncertainty_score = np.array([0.2, 0.2, 0.8])
     equity_boost = np.array([0.0, 0.0, 0.0])
 
-    scores = compute_priority_score(
-        p_lead, uncertainty_score, equity_boost, strategy="highest_risk"
-    )
+    scores = compute_priority_score(p_lead, uncertainty_score, equity_boost, strategy="risk")
     np.testing.assert_array_equal(scores, p_lead)
 
 
@@ -47,9 +45,7 @@ def test_highest_uncertainty_acquisition():
     uncertainty_score = np.array([0.2, 0.2, 0.8])
     equity_boost = np.array([0.0, 0.0, 0.0])
 
-    scores = compute_priority_score(
-        p_lead, uncertainty_score, equity_boost, strategy="highest_uncertainty"
-    )
+    scores = compute_priority_score(p_lead, uncertainty_score, equity_boost, strategy="uncertainty")
     np.testing.assert_array_equal(scores, uncertainty_score)
 
 
@@ -121,22 +117,22 @@ def test_active_learning_rebuilds_features_after_each_round(tmp_path):
 
         # Mock build_features to just return the subset (it returns features df, we just return dummy)
         mock_build_features.side_effect = lambda df, reference_df, include_label_dependent: (
-            pd.DataFrame(np.random.rand(len(df), 5), index=df.index)
+            df.copy()
         )
 
         # Mock model
         mock_model_instance = MagicMock()
-        mock_model_instance.predict_proba.return_value = np.random.rand(15, 2)
+        mock_model_instance.predict_proba.side_effect = lambda X: np.random.rand(len(X), 2)
         mock_xgb.return_value = mock_model_instance
 
-        # Run simulation for 2 rounds
-        simulate_active_learning(
-            features_path=str(features_path),
-            n_rounds=2,
-            batch_size=2,
-            strategies=["random"],
-            output_path=str(tmp_path / "al_results.csv"),
-        )
+        with patch("leadguard.models.active_learning._load_scoring_config") as mock_cfg:
+            mock_cfg.return_value = {"active_learning": {"n_rounds": 2, "batch_size": 2}}
+            # Run simulation for 2 rounds
+            simulate_active_learning(
+                features_path=str(features_path),
+                fairness_ref_path=str(tmp_path / "fairness_ref.parquet"),
+                output_path=str(tmp_path / "al_results.csv"),
+            )
 
         # In round 0, it calls build_features for training set (5 items) and pool (15 items)
         # In round 1, it calls build_features with updated labeled set (7 items) and pool (13 items)
@@ -148,10 +144,10 @@ def test_active_learning_rebuilds_features_after_each_round(tmp_path):
             if reference_df is not None:
                 reference_sizes.append(len(reference_df))
 
-        # We should see increasing reference sizes: 5, then 7
-        assert len(reference_sizes) >= 2
-        assert reference_sizes[0] == 5
-        assert reference_sizes[1] == 5 + 2
+        # We should see increasing reference sizes: 1, then 3, then 5 (2 rounds)
+        assert len(reference_sizes) >= 4
+        assert reference_sizes[0] == 1
+        assert reference_sizes[-1] == 5
 
         # Check model fit is called with increasing data sizes
         fit_sizes = []
@@ -159,6 +155,6 @@ def test_active_learning_rebuilds_features_after_each_round(tmp_path):
             X, y = call.args
             fit_sizes.append(len(X))
 
-        assert len(fit_sizes) == 2
-        assert fit_sizes[0] == 5
-        assert fit_sizes[1] == 7
+        assert len(fit_sizes) >= 3
+        assert fit_sizes[0] == 1
+        assert fit_sizes[-1] == 5

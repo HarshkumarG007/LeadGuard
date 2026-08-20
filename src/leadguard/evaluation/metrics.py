@@ -138,6 +138,7 @@ def compute_metrics(
     y_prob: np.ndarray,
     threshold: float = 0.5,
     split_name: str = "",
+    prefix: str = "",
 ) -> dict[str, float]:
     """Compute all evaluation metrics for a binary lead prediction.
 
@@ -178,6 +179,10 @@ def compute_metrics(
             metrics["f2"],
             metrics["brier_score"],
         )
+
+    if prefix:
+        metrics = {f"{prefix}{k}": v for k, v in metrics.items()}
+
     return metrics
 
 
