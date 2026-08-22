@@ -217,3 +217,23 @@ PHASE 13 PASS - build complete
 - Address field successfully removed from public Priority Queue API and UI (Architecture §9 Privacy).
 - Entire regression test suite passed and coverage checks executed.
 - Comprehensive new README implemented outlining the actual resource-allocation architecture and the no-leakage design invariant.
+
+---
+
+## Phase C & D — Autopsy and Remediation — 2026-08-22
+**Status:** PASS
+**Verification output:**
+`
+FINAL ABLATION RESULTS
+intrinsic_geo Temp PR-AUC: 0.3824
+heuristic (year_built) Temp PR-AUC: 0.3394
+pytest tests/integration/test_api.py -v -s
+18 passed, 5 warnings
+`
+**Notes:**
+- Propensity model confirms measurable selection bias (ROC-AUC 0.733).
+- 4-way ablation with strict chronological rolling folds (Train -> Calibrate -> Test) demonstrates temporal generalization collapse when label-dependent process/spatial features are used.
+- Removed biased features and updated XGB_FEATURES to default to intrinsic_geo.
+- Repaired API to no longer require missing leaky features and fixed a DataFrame index comparison bug.
+- Integration test suite passes perfectly across all 18 test cases.
+- Walkthrough documentation delivered.
