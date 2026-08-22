@@ -57,7 +57,7 @@ TRAIN     CAL      TEST
  Leakage-safe evaluation
            │
            ▼
-   Geo PR-AUC ≈ 0.41
+   Geo PR-AUC ≈ 0.420
 ```
 
 This is one of the central engineering lessons of LeadGuard:

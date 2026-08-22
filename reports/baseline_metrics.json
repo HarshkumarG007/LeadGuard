@@ -1,32 +1,51 @@
 {
+  "split_metadata": {
+    "split_mode": "geographic",
+    "seed": 42,
+    "total_labeled_rows": 6413,
+    "cal_wards": [
+      19,
+      45,
+      31,
+      26,
+      27,
+      38
+    ],
+    "test_wards": [
+      4,
+      43,
+      5,
+      33,
+      49,
+      10
+    ],
+    "train_rows": 4871,
+    "calibration_rows": 752,
+    "test_rows": 790,
+    "STATUS": "OK"
+  },
   "heuristic": {
-    "pr_auc_random": 0.5451872196661215,
-    "pr_auc_geo": 0.5632432977222335,
-    "roc_auc_random": 0.7528008340893396,
-    "f2_random": 0.718353044240035,
-    "brier_score_random": 0.24648985959438377,
-    "roc_auc_geo": 0.752164502164502,
-    "f2_geo": 0.7369942196531792,
-    "brier_score_geo": 0.2534435261707989
+    "pr_auc": 0.5239585457930269,
+    "test_eval_pr_auc": 0.5239585457930269,
+    "test_eval_roc_auc": 0.7473987304495778,
+    "test_eval_f2": 0.7106227106227107,
+    "test_eval_brier_score": 0.25316455696202533,
+    "test_eval_recall_at_20pct": 0.36293436293436293
   },
   "logistic_regression": {
-    "pr_auc_random": 0.9997591892298451,
-    "pr_auc_geo": 1.0,
-    "roc_auc_random": 0.9998808443800522,
-    "f2_random": 0.9904805077062556,
-    "brier_score_random": 0.010830865727406592,
-    "roc_auc_geo": 1.0,
-    "f2_geo": 0.9924812030075187,
-    "brier_score_geo": 0.009082755820127072
+    "pr_auc": 0.314195704724879,
+    "test_eval_pr_auc": 0.314195704724879,
+    "test_eval_roc_auc": 0.46350224316326016,
+    "test_eval_f2": 0.03295668549905838,
+    "test_eval_brier_score": 0.32987037337813396,
+    "test_eval_recall_at_20pct": 0.18532818532818532
   },
   "random_forest": {
-    "pr_auc_random": 1.0,
-    "pr_auc_geo": 1.0,
-    "roc_auc_random": 1.0,
-    "f2_random": 1.0,
-    "brier_score_random": 0.00010731495926503733,
-    "roc_auc_geo": 1.0,
-    "f2_geo": 1.0,
-    "brier_score_geo": 6.394245485154578e-05
+    "pr_auc": 0.3762830232024715,
+    "test_eval_pr_auc": 0.3762830232024715,
+    "test_eval_roc_auc": 0.596274240342037,
+    "test_eval_f2": 0.0,
+    "test_eval_brier_score": 0.3101803993736629,
+    "test_eval_recall_at_20pct": 0.24324324324324326
   }
 }

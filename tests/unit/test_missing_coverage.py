@@ -59,6 +59,6 @@ def test_load_osm_hydrants(tmp_path):
     assert len(df) == 1
     assert df["latitude"].iloc[0] == 41.8
 
-    # missing file
-    df2 = _load_osm_hydrants(tmp_path / "other")
-    assert len(df2) == 0
+    import pytest
+    with pytest.raises(FileNotFoundError):
+        _load_osm_hydrants(tmp_path / "other")

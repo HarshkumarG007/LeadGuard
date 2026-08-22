@@ -80,6 +80,7 @@ INTERIM_SCHEMA = DataFrameSchema(
             nullable=False,
         ),
         "census_tract": Column(str, nullable=True),
+        "inspected_at": Column("datetime64[ns]", nullable=True),
         "last_updated": Column("datetime64[ns]", nullable=False),
     },
     checks=[
@@ -118,6 +119,7 @@ FEATURES_SCHEMA = DataFrameSchema(
         "census_tract": Column(str, nullable=True),
         "service_line_material": Column(str, nullable=True),
         "material_source": Column(str, nullable=False),
+        "inspected_at": Column("datetime64[ns]", nullable=True),
         "last_updated": Column("datetime64[ns]", nullable=False),
     },
     checks=[
@@ -155,3 +157,33 @@ FAIRNESS_REFERENCE_SCHEMA = DataFrameSchema(
     ],
     coerce=True,
 )
+
+import pandas as pd  # noqa: E402
+
+
+class FeatureContractError(ValueError):
+    """Raised when a dataframe violates the strict feature contract (missing required features, etc)."""
+    pass
+
+def validate_features(df: pd.DataFrame, required_features: list[str]) -> pd.DataFrame:
+    """Validate that the dataframe contains all required features and they meet the contract.
+
+    Fails closed (raises FeatureContractError) if any required features are missing.
+    Does NOT silently fill with zeros.
+
+    Args:
+        df: Input DataFrame.
+        required_features: List of column names that must be present.
+
+    Returns:
+        The validated DataFrame containing exactly the required columns in the correct order,
+        cast to float.
+    """
+    missing = [f for f in required_features if f not in df.columns]
+    if missing:
+        raise FeatureContractError(f"Missing required features: {missing}")
+
+    # In a fully fleshed out system, we would also check for forbidden semantics
+    # (e.g. dist_to_nearest_known_lead_m = -1). For now we enforce presence.
+    return df[required_features].copy().astype(float)
+

@@ -95,6 +95,26 @@ class TestPredictEndpoint:
         resp = client.post("/v1/predict", json={"wrong_field": "value"})
         assert resp.status_code == 422
 
+    def test_predict_missing_feature_returns_422(self, client: TestClient, sample_property_id: str) -> None:
+        """Missing required model features should return 422 FeatureContractError."""
+        from unittest.mock import patch
+
+        from api.main import _get_properties
+
+        props = _get_properties()
+        # Drop a required feature
+        props_bad = props.drop(columns=["dist_to_nearest_hydrant_m"])
+
+        with patch("api.main._get_properties", return_value=props_bad):
+            resp = client.post("/v1/predict", json={"property_ids": [sample_property_id]})
+            assert resp.status_code == 422
+            body = resp.json()
+            assert "detail" in body
+            assert "error" in body["detail"]
+            assert body["detail"]["error"] == "Feature contract violation"
+            assert "missing_features" in body["detail"]
+            assert "dist_to_nearest_hydrant_m" in body["detail"]["missing_features"]
+
 
 class TestSinglePredictionEndpoint:
     """GET /v1/properties/{property_id}/prediction"""

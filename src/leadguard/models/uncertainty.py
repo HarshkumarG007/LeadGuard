@@ -29,8 +29,14 @@ from leadguard.utils.seed import SEED
 
 logger = logging.getLogger(__name__)
 
+# Ordered class labels for conformal prediction (binary: NotLead=0, Lead=1)
+# NOTE: actual data values are "Lead", "Copper", "Galvanized".
+# For conformal scoring we map: Lead→1 (positive), all others→0 (negative).
 MATERIALS = ["NotLead", "Lead"]
 N_MATERIALS = len(MATERIALS)
+
+# Data labels that count as labeled for splitting/evaluation
+_LABELED_MATERIALS = ["Lead", "Copper", "Galvanized"]
 
 
 def compute_predictive_entropy(proba: np.ndarray) -> np.ndarray:
@@ -215,22 +221,29 @@ class MondriancConformalPredictor:
 
 
 def calibrate_uncertainty(
-    model_dir: Path | str = "models/xgboost",
     features_path: Path | str = "data/processed/features.parquet",
-    fairness_ref_path: Path | str = "data/fairness_reference.parquet",
+    model_dir: Path | str = "models/xgboost",
+    fairness_ref_path: Path | str = "data/processed/fairness_reference.parquet",
     config_path: Path | str = "configs/train.yaml",
+    reports_dir: Path | str = "reports",
     sample: bool = False,
+    split_mode: str = "geographic",
+    cutoff_date: str | None = None,
+    test_start_date: str | None = None,
+    test_end_date: str | None = None,
+    holdout_wards: list[int] | None = None,
+    min_test_rows: int | None = 100,
 ) -> dict:
-    """Calibrate split conformal and Mondrian conformal predictors.
-
-    Saves conformal_global.pkl and conformal_by_quartile.pkl.
+    """Calibrate conformal predictors for XGBoost.
 
     Args:
-        model_dir: Directory containing model.json.
-        features_path: Features parquet path.
-        fairness_ref_path: Fairness reference parquet (for Mondrian grouping only).
-        config_path: Training config YAML.
-        sample: Use sample paths if True.
+        features_path: Path to processed features.
+        model_dir: Directory containing trained XGBoost model.
+        config_path: Config with confidence_level.
+        sample: If true, use sample features.
+        split_mode: 'geographic', 'temporal', or 'spatial-temporal'
+        cutoff_date: Cutoff date for temporal splits.
+        holdout_wards: Holdout wards for spatial splits.
 
     Returns:
         Dictionary with coverage verification results.
@@ -244,53 +257,80 @@ def calibrate_uncertainty(
         features_path = Path("data/processed/features_sample.parquet")
 
     cfg = yaml.safe_load(Path(config_path).read_text()) if Path(config_path).exists() else {}
-    confidence = cfg.get("confidence_level", 0.90) if not isinstance(cfg, dict) else 0.90
-    # read from scoring config
+    cfg = yaml.safe_load(Path(config_path).read_text()) if Path(config_path).exists() else {}
+    # Read confidence from train config, then scoring config overrides
+    confidence = cfg.get("confidence_level", 0.90) if isinstance(cfg, dict) else 0.90
     scoring_cfg_path = Path("configs/scoring.yaml")
     if scoring_cfg_path.exists():
         scoring_cfg = yaml.safe_load(scoring_cfg_path.read_text())
-        confidence = scoring_cfg.get("confidence_level", 0.90)
+        if isinstance(scoring_cfg, dict):
+            confidence = scoring_cfg.get("confidence_level", confidence)
+            
+    if not 0.0 < confidence < 1.0:
+        raise ValueError(f"Confidence level must be strictly between 0 and 1, got {confidence}")
     alpha = 1.0 - confidence
 
-    # Load model
-    model = xgb.XGBClassifier()
-    model.load_model(str(model_dir / "model.json"))
+    import sys
+    sys.path.insert(0, str(Path("src").absolute()))
+    from leadguard.models.serving import load_serving_model, predict_proba, encode_target, KNOWN_MATERIALS
+
+    try:
+        model = load_serving_model(model_dir)
+    except Exception as e:
+        raise RuntimeError(f"Failed to load serving model for uncertainty calibration: {e}")
 
     # Load features
     df = pd.read_parquet(features_path)
-    labeled = df[df["service_line_material"].isin(MATERIALS)].copy()
+    labeled = df[df["service_line_material"].isin(KNOWN_MATERIALS)].copy()
 
-    from leadguard.evaluation.metrics import geographic_split  # noqa: PLC0415
+    from leadguard.data.features import build_features  # noqa: PLC0415
+    from leadguard.data.split import split_dataset  # noqa: PLC0415
     from leadguard.models.xgboost_model import XGB_FEATURES  # noqa: PLC0415
 
-    # Use a held-out calibration split (never used in training or test)
-    train_geo, cal_geo, test_geo = geographic_split(labeled)
-    # Calibration set: 10% from training partition
-    cal_size = max(10, int(len(train_geo) * 0.10))
-    rng = np.random.default_rng(SEED)
-    idx = rng.permutation(len(train_geo))
-    cal_df = train_geo.iloc[idx[:cal_size]].copy()
+    # Centralized split
+    split_res = split_dataset(
+        labeled,
+        mode=split_mode,
+        cutoff_date=cutoff_date,
+        test_start_date=test_start_date,
+        test_end_date=test_end_date,
+        holdout_wards=holdout_wards,
+        seed=SEED,
+        min_test_rows=min_test_rows,
+    )
+    train_df = split_res.train
+    cal_df = split_res.calibration
+    test_df = split_res.test
+    
+    train_ids = set(train_df["property_id"])
+    cal_ids = set(cal_df["property_id"])
+    test_ids = set(test_df["property_id"])
+    assert train_ids.isdisjoint(cal_ids), "Train and Cal property IDs must be disjoint"
+    assert train_ids.isdisjoint(test_ids), "Train and Test property IDs must be disjoint"
+    assert cal_ids.isdisjoint(test_ids), "Cal and Test property IDs must be disjoint"
 
-    X_cal = cal_df.reindex(columns=XGB_FEATURES, fill_value=0.0).astype(float).values
-    X_test = test_geo.reindex(columns=XGB_FEATURES, fill_value=0.0).astype(float).values
+    as_of_date = split_res.metadata.get("cutoff_date")
 
-    # Multi-class probabilities
-    le = LabelEncoder().fit(MATERIALS)
-    y_cal = le.transform(cal_df["service_line_material"])
-    y_test = le.transform(test_geo["service_line_material"])
+    cal_f = build_features(cal_df, reference_df=train_df, include_label_dependent=True, as_of_date=as_of_date)
+    test_f = build_features(test_df, reference_df=train_df, include_label_dependent=True, as_of_date=as_of_date)
 
-    proba_cal = model.predict_proba(X_cal)  # shape (n_cal, C) — may be binary
-    proba_test = model.predict_proba(X_test)
+    from leadguard.data.validation import validate_features
+    X_cal = validate_features(cal_f, XGB_FEATURES).values
+    X_test = validate_features(test_f, XGB_FEATURES).values
 
-    # For binary classifier (Lead vs. not-Lead), wrap into 3-class structure
-    # Use 1 - P(y_true) as nonconformity score for the true class
+    # Encode targets consistently
+    y_cal = encode_target(cal_df["service_line_material"]).values
+    y_test = encode_target(test_df["service_line_material"]).values
+
+    proba_cal = predict_proba(model, X_cal)
+    proba_test = predict_proba(model, X_test)
+
     def _nonconformity(proba: np.ndarray, y_true: np.ndarray) -> np.ndarray:
-        """Compute nonconformity scores: 1 - P(true class)."""
-        if proba.ndim == 1 or proba.shape[1] == 1:
-            p_true = proba.flatten()
-        else:
-            # Binary classifier: map y_true Lead=1 to column 1, else 0
-            p_true = np.where(y_true == le.transform(["Lead"])[0], proba[:, -1], 1 - proba[:, -1])
+        """Compute nonconformity scores: 1 - P(true class).
+        proba is (n, 2) where col 0 = NotLead, col 1 = Lead.
+        y_true is (n,) where 0 = NotLead, 1 = Lead.
+        """
+        p_true = proba[np.arange(len(y_true)), y_true]
         return 1.0 - p_true
 
     scores_cal = _nonconformity(proba_cal, y_cal)
@@ -304,7 +344,10 @@ def calibrate_uncertainty(
     # Verify empirical coverage on test set
     scores_test = _nonconformity(proba_test, y_test)
     global_coverage = float((scores_test <= global_cp.threshold_).mean())
-    logger.info("Global empirical coverage: %.3f (target: %.3f)", global_coverage, 1 - alpha)
+    set_sizes = (proba_test >= (1.0 - global_cp.threshold_)).sum(axis=1)
+    avg_set_size = float(set_sizes.mean())
+    logger.info("Global empirical coverage: %.3f, Avg Set Size: %.3f (target: %.3f)", global_coverage, avg_set_size, 1 - alpha)
+
 
     # Mondrian conformal — per income quartile (join from fairness_reference, not features)
     fairness_ref_path = Path(fairness_ref_path)
@@ -314,7 +357,7 @@ def calibrate_uncertainty(
         fairness_ref = pd.read_parquet(fairness_ref_path)
         cal_with_tract = cal_df.merge(fairness_ref, on="census_tract", how="left")
         cal_quartiles = cal_with_tract["income_quartile"].fillna(2).astype(int).values
-        test_with_tract = test_geo.merge(fairness_ref, on="census_tract", how="left")
+        test_with_tract = test_df.merge(fairness_ref, on="census_tract", how="left")
         test_quartiles = test_with_tract["income_quartile"].fillna(2).astype(int).values
 
         mondrian_cp = MondriancConformalPredictor(alpha=alpha)
@@ -329,8 +372,14 @@ def calibrate_uncertainty(
             q_scores = _nonconformity(proba_test[mask], y_test[mask])
             q_threshold = mondrian_cp._predictors[q].threshold_
             quartile_coverage[q] = float((q_scores <= q_threshold).mean())
+            q_set_sizes = (proba_test[mask] >= (1.0 - q_threshold)).sum(axis=1)
+            q_avg_set_size = float(q_set_sizes.mean())
             logger.info(
-                "Quartile %d coverage: %.3f (target: %.3f)", q, quartile_coverage[q], 1 - alpha
+                "Quartile %d empirical coverage: %.3f, Avg Set Size: %.3f (n=%d)",
+                q,
+                quartile_coverage[q],
+                q_avg_set_size,
+                mask.sum(),
             )
     else:
         logger.warning("fairness_reference.parquet not found; skipping Mondrian calibration")
@@ -347,6 +396,13 @@ def calibrate_uncertainty(
         "quartile_coverage": {str(k): v for k, v in quartile_coverage.items()},
         "global_threshold": global_cp.threshold_,
     }
+
+    import json
+    reports_dir = Path(reports_dir)
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    with (reports_dir / "uncertainty_metrics.json").open("w") as f:
+        json.dump(result, f, indent=2, default=str)
+
     logger.info("Uncertainty calibration complete: %s", result)
     return result
 
@@ -358,10 +414,32 @@ def main():
     parser = argparse.ArgumentParser(description="Calibrate conformal predictors")
     parser.add_argument("--config", default="configs/train.yaml")
     parser.add_argument("--features", default="data/processed/features.parquet")
-    parser.add_argument("--sample", action="store_true")
+    parser.add_argument("--output-dir", default="models/xgboost")
+    parser.add_argument("--reports-dir", default="reports")
+    parser.add_argument(
+        "--fairness-ref", default="data/processed/fairness_reference.parquet"
+    )
+    parser.add_argument("--sample", action="store_true", help="Use sample features")
+    parser.add_argument("--min-test-rows", type=int, default=100)
+    parser.add_argument("--split-mode", default="geographic", help="geographic, temporal, or spatial-temporal")
+    parser.add_argument("--cutoff-date", default=None, help="YYYY-MM-DD for temporal splits")
+    parser.add_argument("--test-start-date", default=None)
+    parser.add_argument("--test-end-date", default=None)
+    parser.add_argument("--holdout-wards", type=int, nargs="*", default=None, help="Specific wards to hold out")
     args = parser.parse_args()
     result = calibrate_uncertainty(
-        features_path=args.features, config_path=args.config, sample=args.sample
+        model_dir=args.output_dir,
+        features_path=args.features,
+        fairness_ref_path=args.fairness_ref,
+        config_path=args.config,
+        reports_dir=args.reports_dir,
+        sample=args.sample,
+        split_mode=args.split_mode,
+        cutoff_date=args.cutoff_date,
+        test_start_date=args.test_start_date,
+        test_end_date=args.test_end_date,
+        holdout_wards=args.holdout_wards,
+        min_test_rows=args.min_test_rows,
     )
     print(result)
 

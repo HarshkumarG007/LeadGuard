@@ -125,7 +125,8 @@ def simulate_active_learning(
 
             # Rebuild spatial features for L_df
             L_df_feats = build_features(L_df, reference_df=L_df, include_label_dependent=True)
-            X_train = L_df_feats.reindex(columns=XGB_FEATURES, fill_value=0.0).astype(float).values
+            from leadguard.data.validation import validate_features
+            X_train = validate_features(L_df_feats, XGB_FEATURES).values
             y_train = (L_df_feats["service_line_material"] == "Lead").astype(int).values
 
             # Retrain model
@@ -148,7 +149,7 @@ def simulate_active_learning(
             test_df = labeled.loc[test_idx]
             test_df_feats = build_features(test_df, reference_df=L_df, include_label_dependent=True)
             X_test = (
-                test_df_feats.reindex(columns=XGB_FEATURES, fill_value=0.0).astype(float).values
+                validate_features(test_df_feats, XGB_FEATURES).values
             )
             y_test = (test_df_feats["service_line_material"] == "Lead").astype(int).values
 

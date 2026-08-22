@@ -10,6 +10,7 @@ def _make_dummy_data():
             "property_id": [f"chi-{i}" for i in range(10)],
             "latitude": [41.8 + i * 0.01 for i in range(10)],
             "longitude": [-87.6 + i * 0.01 for i in range(10)],
+            "ward": [1, 1, 1, 2, 2, 2, 3, 3, 3, 4],
             "service_line_material": [
                 "Lead",
                 "Copper",

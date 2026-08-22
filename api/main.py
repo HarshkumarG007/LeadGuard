@@ -56,8 +56,30 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
-# In-memory inspection store (per-session, not persistent on HF free tier)
-_inspection_store: list[dict] = []
+# ---------------------------------------------------------------------------
+# Demo In-Memory Store
+# 
+# WARNING: This is a non-persistent demo store designed for the Hugging Face 
+# free tier environment. Submitted inspections will NOT persist across restarts.
+# In a production environment, this should be replaced with a persistent 
+# database (e.g. PostgreSQL or SQLite) integrated with the active learning pipeline.
+# ---------------------------------------------------------------------------
+ACTIVE_LEARNING_LOG_PATH = Path("data/processed/active_learning_log.jsonl")
+
+def _read_inspections() -> list[dict]:
+    if not ACTIVE_LEARNING_LOG_PATH.exists():
+        return []
+    try:
+        with open(ACTIVE_LEARNING_LOG_PATH, "r") as f:
+            return [json.loads(line) for line in f if line.strip()]
+    except Exception as e:
+        logger.error(f"Failed to read active learning log: {e}")
+        return []
+
+def _append_inspection(inspection: dict):
+    ACTIVE_LEARNING_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(ACTIVE_LEARNING_LOG_PATH, "a") as f:
+        f.write(json.dumps(inspection) + "\n")
 
 # Properties store (loaded lazily from sample/processed data)
 _properties_cache: pd.DataFrame | None = None
@@ -121,15 +143,19 @@ def _predict_single(
     from leadguard.evaluation.fairness import compute_equity_boost  # noqa: PLC0415
     from leadguard.models.active_learning import compute_priority_score  # noqa: PLC0415
     from leadguard.models.uncertainty import (  # noqa: PLC0415
-        MATERIALS,
         compute_predictive_entropy,
     )
+    from leadguard.models.serving import predict_proba, CLASS_ORDER  # noqa: PLC0415
 
     feature_names = state.feature_names
-    X = property_row.reindex(feature_names, fill_value=0.0).values.astype(float).reshape(1, -1)
-
+    from leadguard.data.validation import validate_features, FeatureContractError
+    try:
+        X_df = validate_features(property_row.to_frame().T, feature_names)
+        X = X_df.values.astype(float).reshape(1, -1)
+    except FeatureContractError as e:
+        raise HTTPException(status_code=422, detail={"error": "Feature contract violation", "missing_features": str(e)})
     # P(Lead)
-    proba = state.model.predict_proba(X)[0]  # shape (C,)
+    proba = predict_proba(state.model, X)[0]  # shape (C,)
     p_lead = float(proba[-1])  # last column is Lead in binary classifier
 
     # Conformal set
@@ -137,7 +163,7 @@ def _predict_single(
         conformal_sets = state.conformal_global.predict_set(np.array([proba]))
         conformal_set = conformal_sets[0]
     else:
-        conformal_set = MATERIALS.copy()
+        conformal_set = list(CLASS_ORDER)
 
     # Uncertainty score
     uncertainty = float(compute_predictive_entropy(np.array([proba]))[0])
@@ -147,11 +173,11 @@ def _predict_single(
     equity_boost = 0.0
     if census_tract and not state.fairness_reference.empty and features_df is not None:
         all_pred = features_df[["census_tract"]].copy()
-        all_pred["p_lead_calibrated"] = state.model.predict_proba(
-            features_df.reindex(columns=feature_names, fill_value=0.0).astype(float).values
+        all_pred["p_lead_calibrated"] = predict_proba(
+            state.model, validate_features(features_df, feature_names).values
         )[:, -1]
         inspections_df = pd.DataFrame(
-            [{"census_tract": i["census_tract"]} for i in _inspection_store if "census_tract" in i]
+            [{"census_tract": i["census_tract"]} for i in _read_inspections() if "census_tract" in i]
         )
         boost_series = compute_equity_boost(all_pred, inspections_df)
         equity_boost = float(boost_series.get(census_tract, 0.0))
@@ -262,7 +288,7 @@ async def batch_predict(request: PredictRequest) -> PredictResponse:
 
     results = []
     for pid in request.property_ids:
-        row_mask = props["property_id"] == pid
+        row_mask = props["property_id"].astype(str) == str(pid)
         if not row_mask.any():
             # Unknown property — return 404 per Architecture §8 error convention
             raise _error_404(f"property_id '{pid}' not found")
@@ -314,7 +340,11 @@ async def priority_queue(
     from leadguard.models.uncertainty import MATERIALS, compute_predictive_entropy  # noqa: PLC0415
 
     feature_names = state.feature_names
-    X_all = props.reindex(columns=feature_names, fill_value=0.0).astype(float).values
+    from leadguard.data.validation import validate_features, FeatureContractError
+    try:
+        X_all = validate_features(props, feature_names).values
+    except FeatureContractError as e:
+        raise HTTPException(status_code=422, detail=str(e))
     probas = state.model.predict_proba(X_all)
     p_lead_all = probas[:, 1]
 
@@ -331,8 +361,10 @@ async def priority_queue(
     pred_df = props[["census_tract"]].copy()
     pred_df["p_lead_calibrated"] = p_lead_all
     inspections_df = pd.DataFrame(
-        [{"census_tract": i.get("census_tract", "")} for i in _inspection_store]
+        [{"census_tract": i.get("census_tract", "")} for i in _read_inspections()]
     )
+    if inspections_df.empty:
+        inspections_df = pd.DataFrame(columns=["census_tract"])
     boost_series = compute_equity_boost(pred_df, inspections_df)
     equity_all = props["census_tract"].map(boost_series).fillna(0.0).values
 
@@ -396,7 +428,8 @@ async def submit_inspection(request: InspectionSubmitRequest) -> InspectionSubmi
         "census_tract": census_tract,
         "used_in_training": False,
     }
-    _inspection_store.append(inspection)
+    _append_inspection(inspection)
+    inspections = _read_inspections()
     logger.info("Inspection recorded: %s for property %s", inspection_id, request.property_id)
 
     return InspectionSubmitResponse(
@@ -404,7 +437,7 @@ async def submit_inspection(request: InspectionSubmitRequest) -> InspectionSubmi
         property_id=request.property_id,
         inspected_material=request.inspected_material,
         inspected_at=request.inspected_at or datetime.now(UTC),
-        message=f"Inspection recorded. Total inspections this session: {len(_inspection_store)}",
+        message=f"Inspection recorded. Total inspections this session: {len(inspections)}",
     )
 
 

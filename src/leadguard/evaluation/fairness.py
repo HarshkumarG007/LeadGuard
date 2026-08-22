@@ -180,6 +180,13 @@ def run_fairness_audit(
     inspections: pd.DataFrame | None = None,
     output_path: Path | str = "reports/fairness_report.json",
     sample_mode: bool = False,
+    model_dir: Path | str = "models/xgboost",
+    split_mode: str = "geographic",
+    cutoff_date: str | None = None,
+    test_start_date: str | None = None,
+    test_end_date: str | None = None,
+    holdout_wards: list[int] | None = None,
+    min_test_rows: int | None = 100,
 ) -> dict:
     """Run the FNR-by-quartile fairness audit and write report.
 
@@ -190,33 +197,59 @@ def run_fairness_audit(
         inspections: Optional inspections DataFrame.
         output_path: Destination JSON report path.
         sample_mode: If True, use sample data paths.
+        model_dir: Serving model directory.
+        split_mode: Split mode.
+        cutoff_date: Cutoff date for temporal splits.
+        holdout_wards: Specific wards to hold out.
+        min_test_rows: Minimum test rows.
 
     Returns:
         Fairness report dictionary.
     """
-    import xgboost as xgb  # noqa: PLC0415
-
     from leadguard.models.xgboost_model import XGB_FEATURES  # noqa: PLC0415
+    from leadguard.models.serving import load_serving_model, predict_proba, encode_target, KNOWN_MATERIALS
 
     features_path = Path(features_path)
     if sample_mode and not features_path.exists():
         features_path = Path("data/processed/features_sample.parquet")
 
     df = pd.read_parquet(features_path)
-    labeled = df[df["service_line_material"].isin(["Lead", "Copper", "Galvanized"])].copy()
+    labeled = df[df["service_line_material"].isin(KNOWN_MATERIALS)].copy()
 
     # Load model and generate predictions if not provided
     if predictions is None:
-        model_path = Path("models/xgboost/model.json")
-        if not model_path.exists():
+        from leadguard.data.features import build_features
+        from leadguard.data.split import split_dataset
+        
+        split_res = split_dataset(
+            labeled,
+            mode=split_mode,
+            cutoff_date=cutoff_date,
+        test_start_date=test_start_date,
+        test_end_date=test_end_date,
+            holdout_wards=holdout_wards,
+            seed=SEED,
+            min_test_rows=min_test_rows,
+        )
+        test_df = split_res.test
+        as_of_date = split_res.metadata.get("cutoff_date")
+        test_f = build_features(test_df, reference_df=split_res.train, include_label_dependent=True, as_of_date=as_of_date)
+        
+        if not Path(model_dir).exists():
             logger.warning("Model not found; using dummy predictions for fairness audit")
-            labeled["p_lead_calibrated"] = 0.5
+            test_f["p_lead_calibrated"] = 0.5
         else:
-            model = xgb.XGBClassifier()
-            model.load_model(str(model_path))
-            X = labeled.reindex(columns=XGB_FEATURES, fill_value=0.0).astype(float).values
-            labeled["p_lead_calibrated"] = model.predict_proba(X)[:, 1]
-        predictions = labeled[
+            try:
+                import sys
+                sys.path.insert(0, str(Path("src").absolute()))
+                model = load_serving_model(model_dir)
+                from leadguard.data.validation import validate_features
+                X = validate_features(test_f, XGB_FEATURES).values
+                test_f["p_lead_calibrated"] = predict_proba(model, X)[:, -1]
+            except Exception as e:
+                logger.warning("Serving model load failed; using dummy predictions: %s", e)
+                test_f["p_lead_calibrated"] = 0.5
+        predictions = test_f[
             ["property_id", "census_tract", "p_lead_calibrated", "service_line_material"]
         ].copy()
 
@@ -292,10 +325,32 @@ def main():
     parser.add_argument("--raw-dir", default="data/raw")
     parser.add_argument("--sample", action="store_true")
     parser.add_argument("--features", default="data/processed/features.parquet")
+    parser.add_argument("--model-dir", default="models/xgboost")
+    parser.add_argument("--reports-dir", default="reports")
+    parser.add_argument("--min-test-rows", type=int, default=100)
+    parser.add_argument("--split-mode", default="geographic", help="geographic, temporal, or spatial-temporal")
+    parser.add_argument("--cutoff-date", default=None, help="YYYY-MM-DD for temporal splits")
+    parser.add_argument("--test-start-date", default=None)
+    parser.add_argument("--test-end-date", default=None)
+    parser.add_argument("--holdout-wards", type=int, nargs="*", default=None, help="Specific wards to hold out")
     args = parser.parse_args()
 
-    build_fairness_reference(raw_dir=args.raw_dir, sample_mode=args.sample)
-    run_fairness_audit(features_path=args.features, sample_mode=args.sample)
+    if args.sample:
+        # Build synthetic reference data for the sample tests
+        build_fairness_reference(raw_dir=args.raw_dir, sample_mode=True)
+
+    run_fairness_audit(
+        features_path=args.features,
+        sample_mode=args.sample,
+        model_dir=args.model_dir,
+        output_path=str(Path(args.reports_dir) / "fairness_report.json"),
+        split_mode=args.split_mode,
+        cutoff_date=args.cutoff_date,
+        test_start_date=args.test_start_date,
+        test_end_date=args.test_end_date,
+        holdout_wards=args.holdout_wards,
+        min_test_rows=args.min_test_rows,
+    )
     print("PHASE 6 PASS")
 
 

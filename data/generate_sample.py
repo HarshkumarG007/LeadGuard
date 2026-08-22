@@ -140,9 +140,34 @@ def generate_sample(n_rows: int = 7500, output_dir: Path = Path("data/sample")) 
     neighbor_lead_rate = rng.uniform(0.0, 0.5, n_rows)
     knn10_lead_rate = rng.uniform(0.0, 0.5, n_rows)
 
-    # H3 indices — placeholder strings (real ones computed in features.py)
     h3_res8 = [f"881f1d4{i % 10}09fffff" for i in range(n_rows)]
     h3_res9 = [f"891f1d4{i % 10}09fffff" for i in range(n_rows)]
+
+    # Simulate temporal discovery process (inspected_at)
+    # 2020-01-01 to 2025-12-31
+    start_ts = pd.Timestamp("2020-01-01").timestamp()
+    end_ts = pd.Timestamp("2025-12-31").timestamp()
+    
+    inspected_dates = []
+    for i in range(n_rows):
+        if materials_arr[i] is None:
+            inspected_dates.append(pd.NaT)
+        else:
+            yb = year_built[i]
+            if np.isnan(yb):
+                yb_score = 0.5
+            else:
+                yb_score = max(0.0, min(1.0, (1990 - yb) / 100))
+                
+            # Higher risk properties (high yb_score) are discovered earlier
+            # Use beta distribution to skew timestamps
+            score = yb_score * 0.7 + rng.random() * 0.3
+            alpha = max(1.0, 5 * (1 - score))
+            beta_param = max(1.0, 5 * score)
+            
+            time_frac = rng.beta(alpha, beta_param)
+            t = start_ts + time_frac * (end_ts - start_ts)
+            inspected_dates.append(pd.Timestamp(t, unit="s"))
 
     df = pd.DataFrame(
         {
@@ -170,6 +195,7 @@ def generate_sample(n_rows: int = 7500, output_dir: Path = Path("data/sample")) 
             "census_tract": census_tracts,
             "service_line_material": materials_arr,
             "material_source": sources,
+            "inspected_at": inspected_dates,
             "last_updated": datetime.now(UTC).replace(tzinfo=None),
         }
     )

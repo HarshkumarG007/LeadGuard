@@ -129,6 +129,7 @@ LeadGuard is a CPU-first, $0-infrastructure system that:
 | `predicted_at` | timestamp | |
 
 **`Inspection`** — one row per physical inspection result, the feedback-loop record.
+*(Note: Currently implemented as an in-memory `demo_inspection_store` for the Hugging Face free tier; does not persist across restarts).*
 
 | Field | Type | Notes |
 |---|---|---|

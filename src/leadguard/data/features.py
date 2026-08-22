@@ -19,6 +19,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from leadguard.utils.geospatial import (
@@ -82,10 +83,7 @@ def _load_osm_hydrants(raw_dir: Path) -> pd.DataFrame:
     """
     hydrant_path = raw_dir / "osm_hydrants_chicago.json"
     if not hydrant_path.exists():
-        logger.warning(
-            "OSM hydrant file not found at %s; dist_to_nearest_hydrant_m will default", hydrant_path
-        )
-        return pd.DataFrame(columns=["latitude", "longitude"])
+        raise FileNotFoundError(f"Missing required spatial reference: {hydrant_path}")
     import json
 
     data = json.loads(hydrant_path.read_text())
@@ -126,6 +124,7 @@ def _build_label_dependent_features(
     df: pd.DataFrame,
     reference_df: pd.DataFrame,
     knn_k: int = 10,
+    as_of_date: str | None = None,
 ) -> pd.DataFrame:
     """Compute leakage-sensitive features using reference (training) rows only.
 
@@ -133,11 +132,19 @@ def _build_label_dependent_features(
         df: Full DataFrame to compute features for.
         reference_df: Training DataFrame to use as the label reference.
         knn_k: Number of nearest neighbors for KNN lead rate.
+        as_of_date: Optional timestamp representing the prediction time T.
+                    If None, uses the max inspected_at in reference_df.
 
     Returns:
         DataFrame with spatial-lag columns added.
     """
     df = df.copy()
+
+    # C1: Temporal Feature Provenance invariant
+    if as_of_date is not None and "inspected_at" in reference_df.columns:
+        ref_max_date = reference_df["inspected_at"].dropna().max()
+        if not pd.isna(ref_max_date):
+            assert ref_max_date <= pd.Timestamp(as_of_date), f"Leakage detected: reference data contains labels from {ref_max_date} which is after prediction date {as_of_date}"
 
     # Distance to nearest known-lead property in the REFERENCE set
     known_lead = reference_df[reference_df["service_line_material"] == "Lead"][
@@ -149,6 +156,45 @@ def _build_label_dependent_features(
         df, reference_df, resolution=8, output_col="neighbor_lead_rate_h3res8"
     )
     df = compute_knn_lead_rate(df, reference_df, k=knn_k, output_col="knn10_lead_rate")
+
+    # Operational history features strictly as of T
+    ward_lead = reference_df[reference_df["service_line_material"] == "Lead"].groupby("ward").size().rename("known_lead_count_in_ward")
+    ward_inspections = reference_df.groupby("ward").size().rename("inspection_count_in_ward")
+    ward_stats = pd.concat([ward_lead, ward_inspections], axis=1).fillna(0)
+    ward_stats["known_lead_rate_in_ward"] = np.where(
+        ward_stats["inspection_count_in_ward"] > 0,
+        ward_stats["known_lead_count_in_ward"] / ward_stats["inspection_count_in_ward"],
+        0.0
+    )
+
+    # Join ward stats to df
+    df = df.merge(ward_stats, on="ward", how="left")
+    df["known_lead_count_in_ward"] = df["known_lead_count_in_ward"].fillna(0)
+    df["inspection_count_in_ward"] = df["inspection_count_in_ward"].fillna(0)
+    df["known_lead_rate_in_ward"] = df["known_lead_rate_in_ward"].fillna(0.0)
+
+    # Days since last inspection
+    if "inspected_at" in reference_df.columns:
+        if as_of_date is not None:
+            current_t = pd.Timestamp(as_of_date)
+        else:
+            current_t = reference_df["inspected_at"].max()
+            if pd.isna(current_t):
+                current_t = pd.Timestamp.now()
+
+        last_insp_ward = reference_df.dropna(subset=["inspected_at"]).groupby("ward")["inspected_at"].max()
+        last_insp_ward.name = "_last_ward_insp"
+        df = df.merge(last_insp_ward, on="ward", how="left")
+
+        # Calculate days difference
+        df["days_since_last_inspection_in_ward"] = (current_t - df["_last_ward_insp"]).dt.days
+        df["days_since_last_inspection_in_ward"] = df["days_since_last_inspection_in_ward"].fillna(3650.0) # default to 10 years
+        # If difference is negative (which shouldn't happen with proper splits), cap it at 0
+        df["days_since_last_inspection_in_ward"] = df["days_since_last_inspection_in_ward"].clip(lower=0)
+        df = df.drop(columns=["_last_ward_insp"])
+    else:
+        df["days_since_last_inspection_in_ward"] = 3650.0
+
     return df
 
 
@@ -158,6 +204,7 @@ def build_features(
     include_label_dependent: bool = False,
     raw_dir: Path | str = "data/raw",
     knn_k: int = 10,
+    as_of_date: str | None = None,
 ) -> pd.DataFrame:
     """Core feature engineering pipeline for a DataFrame.
 
@@ -167,6 +214,7 @@ def build_features(
         include_label_dependent: Whether to compute label-dependent spatial features.
         raw_dir: Raw data directory.
         knn_k: KNN neighbor count for lead-rate feature.
+        as_of_date: Optional timestamp for prediction time.
 
     Returns:
         Featurized DataFrame.
@@ -179,7 +227,7 @@ def build_features(
             raise ValueError("reference_df must be provided if include_label_dependent is True")
         if "h3_index_res8" not in reference_df.columns:
             reference_df = build_base_features(reference_df, raw_dir=raw_dir)
-        df = _build_label_dependent_features(df, reference_df, knn_k=knn_k)
+        df = _build_label_dependent_features(df, reference_df, knn_k=knn_k, as_of_date=as_of_date)
 
     return df
 

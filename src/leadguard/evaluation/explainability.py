@@ -8,6 +8,12 @@ Implements Architecture §8 shap_top_features field:
 Usage:
     python -m leadguard.evaluation.explainability
     python -m leadguard.evaluation.explainability --sample
+
+NOTE ON CALIBRATION:
+SHAP explains the contribution to the underlying XGBoost score (loaded from model.json), 
+while serving probabilities are produced by the calibrated wrapper (loaded from xgb_model.pkl). 
+These SHAP values explain the raw tree ensemble's internal logic, not the final 
+calibrated probability.
 """
 
 from __future__ import annotations
@@ -201,7 +207,18 @@ def run_explainability(
     model, df, feature_names = _load_model_and_data(model_dir, features_path, sample=sample)
     labeled = df[df["service_line_material"].isin(["Lead", "Copper", "Galvanized"])].copy()
 
-    X = labeled.reindex(columns=feature_names, fill_value=0.0).astype(float).values
+    from leadguard.data.features import build_features
+    from leadguard.data.split import split_dataset
+    from leadguard.utils.seed import SEED
+
+    split_res = split_dataset(labeled, mode="geographic", seed=SEED)
+    test_df = split_res.test
+    as_of_date = split_res.metadata.get("cutoff_date")
+
+    test_f = build_features(test_df, reference_df=split_res.train, include_label_dependent=True, as_of_date=as_of_date)
+
+    from leadguard.data.validation import validate_features
+    X = validate_features(test_f, feature_names).values
     logger.info("Computing SHAP values for %d rows", len(X))
 
     # Global summary plot
@@ -227,8 +244,9 @@ def main():
     parser = argparse.ArgumentParser(description="Run SHAP explainability pipeline")
     parser.add_argument("--sample", action="store_true")
     parser.add_argument("--features", default="data/processed/features.parquet")
+    parser.add_argument("--model-dir", default="models/xgboost")
     args = parser.parse_args()
-    result = run_explainability(features_path=args.features, sample=args.sample)
+    result = run_explainability(features_path=args.features, sample=args.sample, model_dir=args.model_dir)
     print("PHASE 8 PASS — latency:", result["per_prediction_latency_ms_median"], "ms")
 
 

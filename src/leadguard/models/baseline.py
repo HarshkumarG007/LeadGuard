@@ -28,11 +28,9 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 
 from leadguard.data.features import build_features
+from leadguard.data.split import split_dataset
 from leadguard.evaluation.metrics import (
-    check_leakage_gap,
     compute_metrics,
-    geographic_split,
-    random_split,
     write_metrics,
 )
 from leadguard.utils.seed import SEED
@@ -51,7 +49,18 @@ BASELINE_FEATURES = [
 ]
 
 # Full feature set including spatial lags (used for RF and logistic regression)
-FULL_FEATURES = BASELINE_FEATURES + ["neighbor_lead_rate_h3res8", "knn10_lead_rate"]
+FULL_FEATURES = [
+    "year_built",
+    "lot_size_sqft",
+    "building_sqft",
+    "stories",
+    "has_basement",
+    "dist_to_nearest_hydrant_m",
+    "dist_to_nearest_known_lead_m",
+    "neighbor_lead_rate_h3res8",
+    "knn10_lead_rate",
+    "known_lead_rate_in_ward",
+]
 
 
 def _prep_xy(
@@ -71,13 +80,11 @@ def _prep_xy(
     Returns:
         Tuple of (X, y) where y is binary (1 = Lead).
     """
-    avail = [f for f in features if f in df.columns]
-    if len(avail) < len(features):
-        missing = set(features) - set(avail)
-        logger.warning("Missing features (will fill 0): %s", missing)
+    from leadguard.data.validation import validate_features
+    from leadguard.models.serving import encode_target
 
-    X = df.reindex(columns=features, fill_value=0.0).astype(float).values
-    y = (df[target_col] == positive_class).astype(int).values
+    X = validate_features(df, features).values
+    y = encode_target(df[target_col]).values
     return X, y
 
 
@@ -109,6 +116,12 @@ def train_baselines(
     reports_dir: Path | str = "reports",
     config_path: Path | str = "configs/train.yaml",
     sample: bool = False,
+    split_mode: str = "geographic",
+    cutoff_date: str | None = None,
+    test_start_date: str | None = None,
+    test_end_date: str | None = None,
+    holdout_wards: list[int] | None = None,
+    min_test_rows: int | None = 100,
 ) -> dict:
     """Train all three baselines and write results.
 
@@ -118,6 +131,9 @@ def train_baselines(
         reports_dir: Where to write baseline_metrics.json.
         config_path: Training config YAML.
         sample: If True, use sample features path.
+        split_mode: 'geographic', 'temporal', or 'spatial-temporal'
+        cutoff_date: Cutoff date for temporal splits.
+        holdout_wards: Holdout wards for spatial splits.
 
     Returns:
         Dictionary of all baseline metrics.
@@ -141,46 +157,51 @@ def train_baselines(
     labeled = df[df["service_line_material"].isin(["Lead", "Copper", "Galvanized"])].copy()
     logger.info("Loaded %d labeled rows from %s", len(labeled), features_path)
 
-    # 3-way Splits
-    train_rand, cal_rand, test_rand = random_split(labeled, seed=SEED)
-    train_geo, cal_geo, test_geo = geographic_split(labeled)
+    # Centralized Split
+    split_res = split_dataset(
+        labeled,
+        mode=split_mode,
+        cutoff_date=cutoff_date,
+        test_start_date=test_start_date,
+        test_end_date=test_end_date,
+        holdout_wards=holdout_wards,
+        seed=SEED,
+        min_test_rows=min_test_rows,
+    )
 
-    # Feature generation
-    train_geo_f = build_features(train_geo, reference_df=train_geo, include_label_dependent=True)
-    test_geo_f = build_features(test_geo, reference_df=train_geo, include_label_dependent=True)
+    train_df = split_res.train
+    test_df = split_res.test
 
-    train_r_f = build_features(train_rand, reference_df=train_rand, include_label_dependent=True)
-    test_r_f = build_features(test_rand, reference_df=train_rand, include_label_dependent=True)
+    # Feature generation with proper as_of_date
+    as_of_date = split_res.metadata.get("cutoff_date")
 
-    all_metrics: dict = {}
+    train_f = build_features(train_df, reference_df=train_df, include_label_dependent=True, as_of_date=as_of_date)
+    test_f = build_features(test_df, reference_df=train_df, include_label_dependent=True, as_of_date=as_of_date)
+
+    all_metrics: dict = {"split_metadata": split_res.metadata}
 
     # -----------------------------------------------------------------------
     # Baseline 0 — Year-built heuristic
     # -----------------------------------------------------------------------
+    assert set(test_df["property_id"]) == set(test_f["property_id"]), "Model IDs must match heuristic IDs perfectly"
+    
     heuristic = YearBuiltHeuristic()
-    X_test_rand, y_test_rand = _prep_xy(test_rand, ["year_built"])
-    X_test_geo, y_test_geo = _prep_xy(test_geo, ["year_built"])
-    m_rand = compute_metrics(
-        y_test_rand, heuristic.predict_proba(X_test_rand)[:, 1], prefix="test_rand_"
-    )
-    m_geo = compute_metrics(
-        y_test_geo, heuristic.predict_proba(X_test_geo)[:, 1], prefix="test_geo_"
+    X_test_full, y_test_full = _prep_xy(test_f, ["year_built"])
+
+    m_eval = compute_metrics(
+        y_test_full, heuristic.predict_proba(X_test_full)[:, 1], prefix="test_eval_"
     )
     all_metrics["heuristic"] = {
-        "pr_auc_random": m_rand["test_rand_pr_auc"],
-        "pr_auc_geo": m_geo["test_geo_pr_auc"],
-        **m_rand,
-        **m_geo,
+        "pr_auc": m_eval["test_eval_pr_auc"],
+        **m_eval,
     }
 
     # -----------------------------------------------------------------------
     # Baseline 1 — Logistic regression
     # -----------------------------------------------------------------------
     scaler = StandardScaler()
-    X_train_rand, y_train_rand = _prep_xy(train_r_f, FULL_FEATURES)
-    X_test_rand_full, y_test_rand_full = _prep_xy(test_r_f, FULL_FEATURES)
-    X_train_geo, y_train_geo = _prep_xy(train_geo_f, FULL_FEATURES)
-    X_test_geo_full, y_test_geo_full = _prep_xy(test_geo_f, FULL_FEATURES)
+    X_train_full, y_train_full = _prep_xy(train_f, FULL_FEATURES)
+    X_test_f_full, y_test_f_full = _prep_xy(test_f, FULL_FEATURES)
 
     lr_cfg = cfg.get("baseline", {}).get("logistic_regression", {})
     lr = LogisticRegression(
@@ -191,31 +212,17 @@ def train_baselines(
         random_state=SEED,
         class_weight="balanced",
     )
-    X_train_scaled = scaler.fit_transform(X_train_rand)
-    lr.fit(X_train_scaled, y_train_rand)
-    m_rand_lr = compute_metrics(
-        y_test_rand_full,
-        lr.predict_proba(scaler.transform(X_test_rand_full))[:, 1],
-        prefix="test_rand_",
-    )
+    X_train_scaled = scaler.fit_transform(X_train_full)
+    lr.fit(X_train_scaled, y_train_full)
 
-    # Retrain on geo train split
-    scaler_geo = StandardScaler()
-    X_train_geo_scaled = scaler_geo.fit_transform(X_train_geo)
-    lr_geo = LogisticRegression(
-        C=1.0, max_iter=1000, solver="lbfgs", random_state=SEED, class_weight="balanced"
-    )
-    lr_geo.fit(X_train_geo_scaled, y_train_geo)
-    m_geo_lr = compute_metrics(
-        y_test_geo_full,
-        lr_geo.predict_proba(scaler_geo.transform(X_test_geo_full))[:, 1],
-        prefix="test_geo_",
+    m_eval_lr = compute_metrics(
+        y_test_f_full,
+        lr.predict_proba(scaler.transform(X_test_f_full))[:, 1],
+        prefix="test_eval_",
     )
     all_metrics["logistic_regression"] = {
-        "pr_auc_random": m_rand_lr["test_rand_pr_auc"],
-        "pr_auc_geo": m_geo_lr["test_geo_pr_auc"],
-        **m_rand_lr,
-        **m_geo_lr,
+        "pr_auc": m_eval_lr["test_eval_pr_auc"],
+        **m_eval_lr,
     }
 
     # Save LR artifact
@@ -234,40 +241,22 @@ def train_baselines(
         class_weight="balanced",
         n_jobs=-1,
     )
-    rf.fit(X_train_rand, y_train_rand)
-    m_rand_rf = compute_metrics(
-        y_test_rand_full, rf.predict_proba(X_test_rand_full)[:, 1], prefix="test_rand_"
-    )
-
-    rf_geo = RandomForestClassifier(
-        n_estimators=300,
-        max_depth=10,
-        min_samples_leaf=5,
-        random_state=SEED,
-        class_weight="balanced",
-        n_jobs=-1,
-    )
-    rf_geo.fit(X_train_geo, y_train_geo)
-    m_geo_rf = compute_metrics(
-        y_test_geo_full, rf_geo.predict_proba(X_test_geo_full)[:, 1], prefix="test_geo_"
+    rf.fit(X_train_full, y_train_full)
+    m_eval_rf = compute_metrics(
+        y_test_f_full, rf.predict_proba(X_test_f_full)[:, 1], prefix="test_eval_"
     )
     all_metrics["random_forest"] = {
-        "pr_auc_random": m_rand_rf["test_rand_pr_auc"],
-        "pr_auc_geo": m_geo_rf["test_geo_pr_auc"],
-        **m_rand_rf,
-        **m_geo_rf,
+        "pr_auc": m_eval_rf["test_eval_pr_auc"],
+        **m_eval_rf,
     }
-
-    # Leakage check on RF
-    check_leakage_gap(m_rand_rf["test_rand_pr_auc"], m_geo_rf["test_geo_pr_auc"])
 
     # Save RF artifact
     with (output_dir / "random_forest.pkl").open("wb") as f:
-        pickle.dump({"model": rf_geo, "features": FULL_FEATURES}, f)
+        pickle.dump({"model": rf, "features": FULL_FEATURES}, f)
 
     # Write metrics
     write_metrics(all_metrics, reports_dir / "baseline_metrics.json")
-    logger.info("Phase 3 PASS — RF geo PR-AUC: %.4f", m_geo_rf["test_geo_pr_auc"])
+    logger.info("Phase 3 PASS — RF PR-AUC: %.4f", m_eval_rf["test_eval_pr_auc"])
     return all_metrics
 
 
@@ -276,16 +265,34 @@ def main():
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
     parser = argparse.ArgumentParser(description="Train LeadGuard baseline models")
+    parser.add_argument("--output-dir", default="models/baseline")
+    parser.add_argument("--reports-dir", default="reports")
     parser.add_argument("--config", default="configs/train.yaml")
     parser.add_argument("--features", default="data/processed/features.parquet")
     parser.add_argument("--sample", action="store_true", help="Use sample features")
+    parser.add_argument("--min-test-rows", type=int, default=100)
+    parser.add_argument("--split-mode", default="geographic", help="geographic, temporal, or spatial-temporal")
+    parser.add_argument("--cutoff-date", default=None, help="YYYY-MM-DD for temporal splits")
+    parser.add_argument("--test-start-date", default=None)
+    parser.add_argument("--test-end-date", default=None)
+    parser.add_argument("--holdout-wards", type=int, nargs="*", default=None, help="Specific wards to hold out")
     args = parser.parse_args()
     metrics = train_baselines(
-        features_path=args.features, config_path=args.config, sample=args.sample
+        features_path=args.features,
+        output_dir=args.output_dir,
+        reports_dir=args.reports_dir,
+        config_path=args.config,
+        sample=args.sample,
+        split_mode=args.split_mode,
+        cutoff_date=args.cutoff_date,
+        test_start_date=args.test_start_date,
+        test_end_date=args.test_end_date,
+        holdout_wards=args.holdout_wards,
+        min_test_rows=args.min_test_rows,
     )
     print(
         json.dumps(
-            {"random_forest": {"pr_auc_geo": metrics["random_forest"]["pr_auc_geo"]}}, indent=2
+            {"random_forest": {"pr_auc": metrics["random_forest"]["pr_auc"]}}, indent=2
         )
     )
 

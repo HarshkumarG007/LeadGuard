@@ -99,9 +99,20 @@ def test_active_learning_rebuilds_features_after_each_round(tmp_path):
     np.random.seed(42)
     df = pd.DataFrame(
         {
-            "property_id": [f"chi-{i}" for i in range(20)],
+            "property_id": [f"id-{i}" for i in range(20)],
             "service_line_material": ["Lead"] * 5 + ["Unknown"] * 15,
-            "census_tract": ["17031000100"] * 20,
+            "inspected_at": ["2020-01-01"] * 5 + [None] * 15,
+            "census_tract": ["17031010100"] * 20,
+            "year_built": [1950] * 20,
+            "lot_size_sqft": [5000] * 20,
+            "building_sqft": [2000] * 20,
+            "stories": [2] * 20,
+            "has_basement": [1] * 20,
+            "dist_to_nearest_hydrant_m": [50] * 20,
+            "dist_to_nearest_known_lead_m": [100] * 20,
+            "neighbor_lead_rate_h3res8": [0.5] * 20,
+            "knn10_lead_rate": [0.5] * 20,
+            "known_lead_rate_in_ward": [0.5] * 20,
         }
     )
     features_path = tmp_path / "features.parquet"

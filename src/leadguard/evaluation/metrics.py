@@ -170,6 +170,18 @@ def compute_metrics(
     # Calibration
     metrics["brier_score"] = float(brier_score_loss(y_true, y_prob))
 
+    # Recall at 20% budget (representing municipal inspection capacity)
+    budget_size = max(1, int(len(y_true) * 0.20))
+    # Sort predictions descending
+    sorted_idx = np.argsort(y_prob)[::-1]
+    y_true_sorted = y_true[sorted_idx]
+
+    total_leads = y_true.sum()
+    if total_leads > 0:
+        metrics["recall_at_20pct"] = float(y_true_sorted[:budget_size].sum() / total_leads)
+    else:
+        metrics["recall_at_20pct"] = float("nan")
+
     if split_name:
         logger.info(
             "[%s] PR-AUC=%.4f  ROC-AUC=%.4f  F2=%.4f  Brier=%.4f",

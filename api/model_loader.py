@@ -100,31 +100,44 @@ def load_artifacts(
     state = ModelState()
     model_dir = Path(model_dir)
 
-    # Load XGBoost model
-    model_path = model_dir / "model.json"
-    if model_path.exists():
+    import pickle
+    
+    # Load Metadata first to validate compatibility
+    metadata_path = model_dir / "metadata.json"
+    if metadata_path.exists():
         try:
-            model = xgb.XGBClassifier()
-            model.load_model(str(model_path))
-            state.model = model
-            logger.info("Model loaded from %s", model_path)
+            metadata = json.loads(metadata_path.read_text())
+            state.feature_names = metadata.get("feature_names", [])
+            state.model_version = metadata.get("model_version", "unknown")
+            logger.info("Metadata loaded: feature_version=%s", metadata.get("feature_version"))
         except Exception as e:
-            msg = f"Failed to load model from {model_path}: {e}"
-            logger.error(msg)
-            state.load_errors.append(msg)
+            logger.warning("Could not load metadata: %s", e)
+            state.load_errors.append(f"Metadata load failed: {e}")
     else:
-        msg = f"Model file not found: {model_path}"
-        logger.warning(msg)
+        logger.warning("No metadata.json found in %s", model_dir)
+        state.load_errors.append("metadata.json missing")
+
+    # Load Calibrated XGBoost model
+    try:
+        import sys
+        sys.path.insert(0, str(Path("src").absolute()))
+        from leadguard.models.serving import load_serving_model
+        
+        state.model = load_serving_model(model_dir)
+        logger.info("Calibrated model loaded from %s", model_dir)
+    except Exception as e:
+        msg = f"Failed to load serving model: {e}"
+        logger.error(msg)
         state.load_errors.append(msg)
 
-    # Load feature names from metrics
+    # Load feature names from metrics (fallback)
     metrics_path = model_dir / "metrics.json"
-    if metrics_path.exists():
+    if metrics_path.exists() and not state.feature_names:
         try:
             state.metrics = json.loads(metrics_path.read_text())
             state.feature_names = state.metrics.get("features", [])
             state.model_version = state.metrics.get("model_version", "unknown")
-            logger.info("Metrics loaded: %d features", len(state.feature_names))
+            logger.info("Features fallback loaded from metrics: %d features", len(state.feature_names))
         except Exception as e:
             logger.warning("Could not load metrics: %s", e)
 
