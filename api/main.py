@@ -474,7 +474,6 @@ async def submit_inspection(request: InspectionSubmitRequest) -> InspectionSubmi
         "property_id": request.property_id,
         "inspected_material": request.inspected_material,
         "census_tract": census_tract,
-        "notes": request.notes,
         "submitted_at": datetime.now(UTC).isoformat(),
     }
     

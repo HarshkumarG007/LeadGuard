@@ -2,7 +2,7 @@
   "split_metadata": {
     "split_mode": "geographic",
     "seed": 42,
-    "total_labeled_rows": 6413,
+    "total_labeled_rows": 6412,
     "cal_wards": [
       19,
       45,
@@ -19,33 +19,41 @@
       49,
       10
     ],
-    "train_rows": 4871,
-    "calibration_rows": 752,
-    "test_rows": 790,
+    "train_rows": 4873,
+    "calibration_rows": 754,
+    "test_rows": 785,
     "STATUS": "OK"
   },
   "heuristic": {
-    "pr_auc": 0.5239585457930269,
-    "test_eval_pr_auc": 0.5239585457930269,
-    "test_eval_roc_auc": 0.7473987304495778,
-    "test_eval_f2": 0.7106227106227107,
-    "test_eval_brier_score": 0.25316455696202533,
-    "test_eval_recall_at_20pct": 0.36293436293436293
+    "pr_auc": 0.522370055606395,
+    "test_eval_pr_auc": 0.522370055606395,
+    "test_eval_roc_auc": 0.7449582983981289,
+    "test_eval_f2": 0.7069219440353461,
+    "test_eval_brier_score": 0.25477707006369427,
+    "test_eval_recall_at_20pct": 0.36046511627906974
+  },
+  "prevalence": {
+    "pr_auc": 0.3286624203821656,
+    "test_eval_pr_auc": 0.3286624203821656,
+    "test_eval_roc_auc": 0.5,
+    "test_eval_f2": 0.0,
+    "test_eval_brier_score": 0.22092955957815483,
+    "test_eval_recall_at_20pct": 0.20930232558139536
   },
   "logistic_regression": {
-    "pr_auc": 0.314195704724879,
-    "test_eval_pr_auc": 0.314195704724879,
-    "test_eval_roc_auc": 0.46350224316326016,
-    "test_eval_f2": 0.03295668549905838,
-    "test_eval_brier_score": 0.32987037337813396,
-    "test_eval_recall_at_20pct": 0.18532818532818532
+    "pr_auc": 0.31632099206505215,
+    "test_eval_pr_auc": 0.31632099206505215,
+    "test_eval_roc_auc": 0.46441757498198083,
+    "test_eval_f2": 0.0330812854442344,
+    "test_eval_brier_score": 0.3304104123365897,
+    "test_eval_recall_at_20pct": 0.18604651162790697
   },
   "random_forest": {
-    "pr_auc": 0.3762830232024715,
-    "test_eval_pr_auc": 0.3762830232024715,
-    "test_eval_roc_auc": 0.596274240342037,
+    "pr_auc": 0.3689854579053541,
+    "test_eval_pr_auc": 0.3689854579053541,
+    "test_eval_roc_auc": 0.5733271553182413,
     "test_eval_f2": 0.0,
-    "test_eval_brier_score": 0.3101803993736629,
-    "test_eval_recall_at_20pct": 0.24324324324324326
+    "test_eval_brier_score": 0.30977948035590325,
+    "test_eval_recall_at_20pct": 0.2596899224806202
   }
 }

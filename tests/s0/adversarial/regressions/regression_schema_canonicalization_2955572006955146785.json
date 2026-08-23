@@ -1,0 +1,1 @@
+{"payload": {"k1": "", "k2": " "}, "mutation": "fuzz_unicode_and_floats", "family": "schema_canonicalization"}

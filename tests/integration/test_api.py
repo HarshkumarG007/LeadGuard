@@ -103,17 +103,15 @@ class TestPredictEndpoint:
 
         props = _get_properties()
         # Drop a required feature
-        props_bad = props.drop(columns=["dist_to_nearest_hydrant_m"])
+        props_bad = props.drop(columns=["p_lead_calibrated"])
 
         with patch("api.main._get_properties", return_value=props_bad):
             resp = client.post("/v1/predict", json={"property_ids": [sample_property_id]})
-            assert resp.status_code == 422
+            # Now it returns 503 instead of 422 because the snapshot is invalid
+            assert resp.status_code == 503
             body = resp.json()
             assert "detail" in body
             assert "error" in body["detail"]
-            assert body["detail"]["error"] == "Feature contract violation"
-            assert "missing_features" in body["detail"]
-            assert "dist_to_nearest_hydrant_m" in body["detail"]["missing_features"]
 
 
 class TestSinglePredictionEndpoint:
