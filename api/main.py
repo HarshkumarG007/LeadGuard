@@ -395,6 +395,20 @@ async def issue_decisions(
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> DecisionIssueResponse:
     """Formally issue a policy decision and record it to the immutable ledger."""
+    
+    # SAFETY INVARIANT (S0.4): Absence of operational capability is default.
+    # We must explicitly enable PRODUCTION_MODE to dispatch operational decisions.
+    import os
+    production_mode = os.environ.get("LEADGUARD_PRODUCTION_MODE", "false").lower() == "true"
+    if not production_mode:
+        raise HTTPException(
+            status_code=403, 
+            detail={
+                "error": "Operational dispatch disabled", 
+                "detail": "LEADGUARD_PRODUCTION_MODE is not explicitly enabled. Operational dispatch is structurally prohibited."
+            }
+        )
+
     from leadguard.data.ledger import ImmutableLedger, LedgerEntry
     ledger = ImmutableLedger()
     
