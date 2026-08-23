@@ -1,248 +1,167 @@
-# 🛡️ LeadGuard
+# 🛡️ LeadGuard 2.0
 
-**LeadGuard 1.0 solved evaluation integrity. LeadGuard 2.0 begins solving decision integrity.**
+**LeadGuard 1.0 solved evaluation integrity. LeadGuard 2.0 is a cryptographically verifiable scientific apparatus for measuring utility.**
 
-LeadGuard is an end-to-end machine-learning system for helping municipalities decide which properties to inspect first when the material of a drinking-water service line is unknown.
+```text
+┌──────────────────────────────────────────────────────────┐
+│                 LEADGUARD 2.0 STATUS                     │
+├──────────────────────────────────────────────────────────┤
+│ S0 Verification:       COMPLETE                          │
+│ S0 Artifacts:          FROZEN                            │
+│ Critical Violations:   0                                 │
+│ S1 Preflight:          PASS                              │
+│ Independent Audit:     PENDING                           │
+│ S1 Authorization:      LOCKED                            │
+│ Real-World Data:       NOT ADMITTED                      │
+└──────────────────────────────────────────────────────────┘
+```
 
-It combines spatial machine learning, leakage-safe feature engineering, probability calibration, conformal uncertainty, active learning, fairness-aware prioritization, SHAP explainability, and a privacy-conscious API into one reproducible pipeline.
+LeadGuard is an end-to-end machine-learning system for helping municipalities prioritize inspections for drinking-water service lines of unknown material. 
+
+While LeadGuard 1.0 focused on eliminating spatial label leakage and building a defensible baseline (PR-AUC ≈ 0.41), **LeadGuard 2.0 structurally enforces the separation between a model's statistical beliefs and a system's real-world economic utility.**
 
 ---
 
-## 1. What LeadGuard 1.0 Accomplished
+## 1. The Verification Architecture
 
-LeadGuard 1.0 established a scientifically characterized decision engine for lead-risk information acquisition. It successfully transitioned the project from a standard predictive modeling pipeline into a rigorous, utility-driven decision engine that explicitly separates **Belief ≠ Policy ≠ Action**. 
-
-By rebuilding the architecture around information-flow integrity, LeadGuard 1.0 proved that a high ML metric can often be evidence of a bad evaluation protocol rather than a good model.
-
-## 2. The Leakage Discovery & Forensic Audit
-
-LeadGuard is deliberately not a story about achieving the highest possible ML score. During early evaluation, an apparently excellent model performance (PR-AUC ≈ 0.99+) was found to be contaminated by label leakage through spatial features.
-
-The original pipeline allowed information derived from known lead labels to influence feature construction before the train/test boundary had been respected. Instead of hiding this, LeadGuard was redesigned around a much stricter principle:
-**No evaluation example should receive label-derived information that would not actually be available at prediction time.**
-
-The resulting architecture produced substantially more modest—but much more defensible—performance (Geo PR-AUC ≈ 0.41).
-
-## 3. 1.0 Architecture
-
-The LeadGuard 1.0 architecture structurally separates the expensive analytical components from the hot operational path.
+The architecture relies on a fundamental separation of powers: the machinery that makes decisions cannot be trusted to independently authorize or validate itself. The pipeline is locked until human attestation unlocks it.
 
 ```text
-                    ┌───────────────────┐
-                    │ Feature Pipeline  │
-                    └─────────┬─────────┘
-                              ↓
-                    ┌───────────────────┐
-                    │ Predictive Model  │
-                    └─────────┬─────────┘
-                              ↓
-                    ┌───────────────────┐
-                    │ Calibrated Belief │
-                    └─────────┬─────────┘
-                              ↓
-                    ┌───────────────────┐
-                    │       EVI         │
-                    └─────────┬─────────┘
-                              ↓
-                    ┌───────────────────┐
-                    │ Policy Optimizer  │
-                    └─────────┬─────────┘
-                              ↓
-                    ┌───────────────────┐
-                    │ Decision Ledger   │
-                    └───────────────────┘
+             ┌─────────────────────────┐
+             │   S1 COHORT CONTRACT    │ (Frozen Mathematical Definitions)
+             └───────────┬─────────────┘
+                         │
+             ┌───────────▼─────────────┐
+             │   ADVERSARIAL HARNESS   │ (S0 Machine Verification)
+             └───────────┬─────────────┘
+                         │
+             ┌───────────▼─────────────┐
+             │    IMMUTABLE EVIDENCE   │ (Manifests, Ledger, Hashes)
+             └───────────┬─────────────┘
+                         │
+             ┌───────────▼─────────────┐
+             │ INDEPENDENT VERIFIER    │ (Auditor Environment & Offline Key)
+             └───────────┬─────────────┘
+                         │
+             ┌───────────▼─────────────┐
+             │    HUMAN ATTESTATION    │ (Ceremony & S1_ATTESTATION_RECORD)
+             └───────────┬─────────────┘
+                         │
+             ┌───────────▼─────────────┐
+             │      S1 LOCKED GATE     │ (ZERO-DATA PREFLIGHT)
+             └───────────┬─────────────┘
+                         │
+                         ▼
+                REAL-WORLD COHORT S1
 ```
-
-## 4. 1.0 Model + Evaluation
-
-LeadGuard 1.0 enforces a strict three-way conceptual split (Train 70% / Cal 15% / Test 15%) and utilizes a geographic holdout to test generalization to unseen spatial regions. The model uses XGBoost for core risk prediction and relies heavily on properly isolated spatial features. 
-
-## 5. 1.0 Performance Table
-
-The reported ~0.41 and ~0.34 results are from the bundled synthetic/sample evaluation.
-
-| Metric                      | Post-fix sample result | Interpretation                    |
-| --------------------------- | ---------------------- | --------------------------------- |
-| Baseline PR-AUC             | ~0.34                  | Reference model                   |
-| XGBoost geographic PR-AUC   | ~0.41                  | Leakage-safe sample result        |
-| Absolute PR-AUC improvement | ~0.07                  | XGBoost minus baseline            |
-| Relative PR-AUC improvement | ~21%                   | Relative to baseline              |
-| Random/Geo gap              | ~12.5%                 | Below 15% project audit threshold |
-
-## 6. Uncertainty, Calibration, Fairness, & Active Learning
-
-LeadGuard 1.0 explicitly models:
-* **Calibration**: Models are calibrated via Platt scaling on a held-out calibration set to ensure `P(Lead)` reflects true statistical probability.
-* **Conformal Uncertainty**: The system outputs mathematically bounded prediction sets (e.g., `{NotLead, Lead}` when ambiguous).
-* **Equity-Aware Ranking**: Demographic and census variables are intentionally omitted from the predictive model and are instead used in a separate fairness-accounting layer to prevent systematically under-inspecting specific neighborhoods.
-* **Active Learning**: Feature rebuilding occurs explicitly each time new ground truth is acquired to prevent data staleness.
-
-## 7. Engineering Quality Metrics
-
-| Metric | Status |
-|---|---|
-| Test coverage | **88.45%** |
-| Leakage-audit gap | **12.5%** |
-| CI linting (Ruff) | ✅ Passing |
-| Automated tests | ✅ Passing locally |
-
-## 8. What Changed After the Audit
-
-```text
-suspiciously high metric
-           │
-           ▼
-     forensic audit
-           │
-           ▼
-     leakage found
-           │
-           ▼
-  architecture rebuilt
-           │
-           ▼
- regression tests added
-           │
-           ▼
-   honest evaluation
-           │
-           ▼
-   defensible metric
-```
-
-## 9. 1.0 Limitations
-
-LeadGuard 1.0 currently has important limitations:
-* **Optimizer**: The 2-for-2 local search heuristic leaves a 2.3% >1% regret tail under extreme budget tightness (0.14 - 0.18).
-* **Storage**: Parquet predicate lookup degrades into sequential scanning under concurrency (API cold start ~1.7s, p50 ~600ms).
-* **Calibration**: Point-estimate EVI is highly sensitive to severe miscalibration.
-* **Causal utility**: Synthetic experiments do **not** establish real-world causal utility.
-* **Observational selection**: Historical inspection data may not represent random observation.
-* **Real-world validation**: $EVI_{predicted}$ vs $EVI_{realized}$ remains to be established.
 
 ---
 
-## 10. Transition to LeadGuard 2.0
+## 2. What S0 Does and Does Not Establish
 
-With evaluation integrity solved, LeadGuard 2.0 begins solving decision integrity. We are shifting from a static decision model to a longitudinal observational infrastructure that can measure $EVI_{predicted}$ versus $EVI_{realized}$.
+We have successfully completed Phase S0, constructing the observational infrastructure required for Phase S1. However, this is a **scientific provenance document**, not a victory report.
 
-| Area | 1.0 | 2.0 S0 |
-| --- | --- | --- |
-| Leakage-safe spatial ML | ✅ | Preserved |
-| XGBoost | ✅ | Preserved |
-| Calibration | ✅ | Preserved |
-| Conformal uncertainty | ✅ | Preserved |
-| Active learning | ✅ | Preserved |
-| Equity-aware ranking | ✅ | Preserved |
-| SHAP | ✅ | Preserved |
-| Geographic evaluation | ✅ | Preserved |
-| **Immutable decision records** | — | **✅ S0** |
-| **Decision provenance** | — | **✅ S0** |
-| **Temporal outcome barrier** | — | **✅ S0** |
-| **Delayed ground-truth linking** | — | **✅ S0** |
-| **Shadow-mode environment isolation** | — | **✅ S0** |
-| **Dispatch safety boundary** | — | **✅ S0** |
-| **Reconstructed realized metrics** | — | **✅ S0** |
-| **Monitoring/dashboard layer** | Partial/future | **✅ S0** |
-| **Cohort evaluation** | — | **🔜 S1** |
+### **S0 establishes:**
+* **Invariant enforcement**: Relational logic behaves correctly even under hostile permutation.
+* **Adversarial test machinery**: A deterministic matrix covering 12 threat families.
+* **Evidence integrity**: Hashes, immutability, and protection against Hostile-Maintainer attacks.
+* **Shadow-mode safety boundaries**: Production endpoints demonstrably cannot dispatch.
+* **Preflight readiness**: The synthetic zero-data test successfully proved isolated execution.
 
-## 11. 2.0 Architecture
+### **S0 does not establish:**
+* **Real-world predictive performance**: Synthetic tests do not establish generalization.
+* **Causal superiority**: Simulation does not equal true policy advantage.
+* **Realized economic value**: Mathematical sensitivity analysis does not guarantee municipal value.
+* **Equity performance on municipal data**: Real-world demographic impact remains untested.
+* **Authorization for real interventions**: S1 generates shadow decisions only.
+
+---
+
+## 3. The Mathematical Estimands (S1)
+
+The entire apparatus is built to correctly record data so that we can ultimately calculate the S1 estimands. These are the equations that will govern LeadGuard's utility, provided the infrastructure is proven secure.
+
+**1. The Strict Temporal Barrier**  
+Outcomes must never leak into the decision space:
+$$ T_{feature} \le T_{decision} < T_{observation} \le T_{availability} $$
+
+**2. Economic Value of Information (EVI)**  
+The core hypothesis of LeadGuard 2.0 is measuring whether the predicted value translates to reality:
+$$ EVI_{predicted} \longrightarrow EVI_{realized} $$
+
+**3. Policy Regret**  
+The loss function for the operational system compares the policy's chosen intervention against an omniscient oracle:
+$$ Regret_{policy} = Utility_{oracle} - Utility_{policy} $$
+
+---
+
+## 4. The S0 Adversarial Harness
+
+To trust the S1 measurements, the machinery recording them was subjected to an adversarial gauntlet (`scripts/run_s0_adversarial.py`).
+
+1. **12 Threat Families**: The harness attacks temporal leakage, budget exhaustion, ledger mutability, API shadow failures, and concurrency/clock chaos.
+2. **Property-Based Expansion (PBE)**: Using Hypothesis, metamorphic testing forces relational invariants to prove consistency (e.g., $f(perm(X)) == f(X)$). **Current explicit PBE coverage is 3/12 families.**
+3. **Zero Critical Violations**: The S0 harness executes deterministically with 0 false positives and 0 missed breaches.
+
+---
+
+## 5. Air-Gapped Trust & Cryptography
+
+S0 stripped signing authority from the operational repository. The `sign_s0_report.py` tool requires an offline RSA-2048 private key, while the independent verifier (`verify_s0_report.py`) requires only the public key.
+
+**Hostile-Maintainer Protection**: If a compromised engineer alters the test logic to force a `PASS` and recalculates the report hash, the independent verifier immediately detects the forgery, because the private key is missing from the environment. Cryptography here guarantees artifact integrity, while **independence comes purely from the human governance procedure**.
+
+---
+
+## 6. Economic Sensitivity (EVI)
+
+A sensitivity analysis (`scripts/evi_sensitivity_analysis.py`) traced the boundaries of the assumed economics. For an assumed $100 inspection cost and $5,000 intervention value, the **break-even point is $500**. 
+
+Under the registered assumptions, this yields a **400% normalized margin of robustness**. This is an analytical boundary under predefined parameters, not empirical evidence of real-world value. See the [Assumption Register](contracts/S1_ASSUMPTION_REGISTER.md).
+
+---
+
+## 7. The S1 Zero-Data Preflight
+
+Before accepting real-world data, the pipeline executed a zero-data check (`scripts/s1_zero_data_check.py`) using a synthetic namespace. 
+
+This test established:
+1. Zero outbound production dispatches.
+2. The real S1 production ledger remained mathematically unmodified (hash-identical).
+3. The kill-switch successfully aborted state pre-commit and recorded an auditable terminal state post-persistence.
+4. Idempotency correctly handled duplicate decision attempts across processes.
+
+---
+
+## 8. Artifact & Git Tree
 
 ```text
-    LEADGUARD 1.0 
-          │
-          ▼ 
-  Leakage-safe ML system
-          │
-  ┌───────┴───────┐
-  ▼               ▼
-Risk / unc.   Equity / prio
-  │               │
-  └───────┬───────┘
-          ▼
-   Inspection queue
-          │
-          ▼
-    Ground truth
-          │
-          ▼
-   Active learning
-          │
-          ▼
-┌─────────────────────┐
-│    LEADGUARD 2.0    │
-│    S0 FOUNDATION    │
-└─────────┬───────────┘
-          ▼
-   Shadow Decision 
-          │
-          ▼
- Immutable Decision Log
-          │
-    30-day barrier 
-          │
-          ▼
-     Observation 
-          │
-          ▼
-   Temporal Linker 
-          │
-          ▼
-Reconstructed Outcomes
-          │
-          ▼
-  Monitoring / EVI
-          │
-          ▼
-  Future Cohort S1
+LeadGuard/
+├── contracts/
+│   ├── s1_cohort_contract.md         # Frozen mathematical estimands
+│   ├── S1_ASSUMPTION_REGISTER.md     # Frozen economic parameters
+│   └── S1_ATTESTATION_RECORD.md      # Pending Human Signature
+├── keys/
+│   ├── human_offline_key.pub         # Public verification material
+│   └── human_offline_key.pem         # NEVER IN REPOSITORY (Air-gapped)
+├── reports/
+│   ├── s0/
+│   │   ├── S0_ATTACK_MANIFEST.jsonl  # The complete adversarial matrix
+│   │   └── S0_ATTACK_REPORT.md       # Evidence report (.sha256, .sig)
+│   └── s1/
+│       └── S1_PREFLIGHT_REPORT.md    # Zero-data check results
+├── scripts/
+│   ├── evi_sensitivity_analysis.py
+│   ├── hostile_maintainer_test.py
+│   ├── run_s0_adversarial.py
+│   ├── s1_zero_data_check.py
+│   ├── sign_s0_report.py
+│   └── verify_s0_report.py
+└── src/leadguard/                    # The operational codebase
 ```
 
-## 12. S0 Shadow-Mode Foundation
+---
 
-We have successfully completed Phase S0, establishing the observational infrastructure required for LeadGuard 2.0.
+## 9. Next Steps
 
-### S0.1 Immutable decisions
-Every shadow decision is recorded in an append-only JSONL ledger (`src/leadguard/shadow/decision_recorder.py`). We capture complete provenance (model version, calibration cutoff, optimizer state) and secure the payload with a canonical SHA-256 hash.
-
-### S0.2 Temporal/causal observation barrier
-Delayed observations are linked to decisions via `outcome_linker.py`. The linker explicitly enforces a causality barrier: it structurally refuses to join an observation whose `outcome_available_at` falls before or at the original `decision_time`.
-
-### S0.3 Data/environment isolation
-The shadow ledgers enforce physical separation by writing to environment-specific namespaces (`data/processed/shadow/synthetic/` vs `production/`). 
-
-### S0.4 Production-dispatch safety invariant
-The API (`api/main.py`) implements a hard capability boundary. Unless the environment variable `LEADGUARD_PRODUCTION_MODE=true` is explicitly provided, the system defaults to safely denying operational dispatch, throwing a 403 Forbidden.
-
-### S0.5 Metric reconstruction + monitoring
-The dashboard (`src/leadguard/monitoring/dashboard.py`) reconstructs calibration (ECE, Brier) and economic metrics (Predicted vs Realized EVI, Risk-Weighted Regret, Value-Weighted Confusion Matrix) dynamically from the immutable ledgers.
-
-### Shadow-mode execution proof
-The full chain was proven via `scripts/run_shadow_cycle.py`, successfully simulating a decision at $T_0$, an inspection at $T_0+5$, an outcome at $T_0+30$, and validating that a temporal join at $T_0+15$ correctly hides the future outcome.
-
-## 13. Current 2.0 Status
-The S0 phase is complete. The system is structurally prepared to ingest a real-world shadow cohort without risking operational deployment.
-
-## 14. S1 Roadmap
-Phase S1 will initiate a Real-World Shadow Cohort:
-* Longitudinal tracking of $EVI_{predicted}$ vs $EVI_{realized}$ on real municipal data.
-* Continued calibration monitoring in the wild.
-* Identification of actual risk-weighted regret.
-
-## 15. Reproducibility / Audit Artifacts
-
-* **Frozen corpus**: `data/test_fixtures/f7_regret_corpus_v1.json`
-* **Adversarial matrix**: `data/processed/f7_matrix.json`
-
-## 16. Limitations and Claims
-
-LeadGuard does **not** claim:
-* perfect optimization
-* true O(1) storage lookup
-* perfect probability calibration
-* causal identification from observational data
-* guaranteed public-health utility
-* that synthetic EVI equals real-world EVI
-
-## 17. Final Research/Engineering Takeaway
-
-LeadGuard is a demonstration of a broader ML engineering principle: trustworthy machine learning is not just about building a powerful model. It is about controlling information flow, measuring uncertainty, validating assumptions, protecting users, and being willing to report a lower number when the lower number is the truth.
+LeadGuard's operational state is currently **LOCKED**. The system cannot ingest real-world data or execute shadow decisions until the independent auditor performs the attestation ceremony, independently verifies the hashes, signs the `S1_ATTESTATION_RECORD.md`, and merges it into the `main` branch.
