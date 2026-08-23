@@ -120,6 +120,7 @@ FEATURES_SCHEMA = DataFrameSchema(
         "service_line_material": Column(str, nullable=True),
         "material_source": Column(str, nullable=False),
         "inspected_at": Column("datetime64[ns]", nullable=True),
+        "information_available_at": Column("datetime64[ns]", nullable=True),
         "last_updated": Column("datetime64[ns]", nullable=False),
     },
     checks=[

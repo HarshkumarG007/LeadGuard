@@ -109,3 +109,55 @@ def test_label_permutation_collapses_performance():
     # The nearest known lead might change, but it must strictly only depend on the randomized train_df.
     # The true test labels (which are not randomized) shouldn't be predictable from this.
     assert "dist_to_nearest_known_lead_m" in test_features.columns
+
+
+def test_c1_temporal_provenance_invariant():
+    """
+    Test that modifying any label or metadata that becomes available AFTER
+    the prediction cutoff timestamp does not change the feature matrix.
+    """
+    df = _make_dummy_data()
+    # Add timestamps
+    cutoff = pd.Timestamp("2023-01-01")
+    df["inspected_at"] = pd.Timestamp("2022-12-01")
+    # Some available before cutoff, some after
+    df["information_available_at"] = [
+        pd.Timestamp("2022-12-15"),
+        pd.Timestamp("2023-01-10"),
+        pd.Timestamp("2022-12-20"),
+        pd.Timestamp("2023-02-01"),
+        pd.Timestamp("2022-11-01"),
+        pd.Timestamp("2023-03-01"),
+        pd.Timestamp("2022-10-01"),
+        pd.Timestamp("2023-04-01"),
+        pd.Timestamp("2022-09-01"),
+        pd.Timestamp("2023-05-01"),
+    ]
+    
+    # Simulate a chronological split at `cutoff`
+    # The reference df can only contain labels available BEFORE cutoff.
+    train_df = df[df["information_available_at"] < cutoff].copy()
+    test_df = df[df["information_available_at"] >= cutoff].copy()
+    
+    # Baseline features
+    test_features_baseline = build_features(
+        test_df, reference_df=train_df, include_label_dependent=True, as_of_date=str(cutoff)
+    )
+    
+    # Now artificially mutate the FUTURE labels and their metadata
+    # (These represent labels that were inspected before prediction, but whose
+    # results only became available AFTER prediction).
+    test_df_mutated = test_df.copy()
+    test_df_mutated["service_line_material"] = "Lead"
+    test_df_mutated["material_source"] = "mutated"
+    test_df_mutated["inspected_at"] = pd.Timestamp("2020-01-01") # Mutating inspection date shouldn't matter!
+    
+    test_features_mutated = build_features(
+        test_df_mutated, reference_df=train_df, include_label_dependent=True, as_of_date=str(cutoff)
+    )
+    
+    # Assert features are bit-for-bit identical
+    pd.testing.assert_frame_equal(
+        test_features_baseline.drop(columns=["service_line_material", "material_source", "inspected_at", "information_available_at"], errors="ignore"),
+        test_features_mutated.drop(columns=["service_line_material", "material_source", "inspected_at", "information_available_at"], errors="ignore")
+    )

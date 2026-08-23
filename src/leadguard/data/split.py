@@ -109,11 +109,11 @@ def split_dataset(
         cutoff = pd.Timestamp(cutoff_date)
         metadata["cutoff_date"] = cutoff_date
 
-        if "inspected_at" not in labeled.columns:
-            raise ValueError("inspected_at column missing for temporal split")
+        if "information_available_at" not in labeled.columns:
+            raise ValueError("information_available_at column missing for temporal split")
 
-        train = labeled[labeled["inspected_at"] < cutoff].copy()
-        future = labeled[labeled["inspected_at"] >= cutoff].copy()
+        train = labeled[labeled["information_available_at"] < cutoff].copy()
+        future = labeled[labeled["information_available_at"] >= cutoff].copy()
 
         if len(future) == 0:
             raise ValueError(f"No future data found after {cutoff_date}")
@@ -121,18 +121,18 @@ def split_dataset(
         if test_start_date and test_end_date:
             t_start = pd.Timestamp(test_start_date)
             t_end = pd.Timestamp(test_end_date)
-            cal = future[future["inspected_at"] < t_start].copy()
-            test = future[(future["inspected_at"] >= t_start) & (future["inspected_at"] < t_end)].copy()
+            cal = future[future["information_available_at"] < t_start].copy()
+            test = future[(future["information_available_at"] >= t_start) & (future["information_available_at"] < t_end)].copy()
         else:
-            # Fallback to naive halving
-            future = future.sort_values("inspected_at")
+            # Random split within future
+            future = future.sort_values("information_available_at")
             mid_idx = len(future) // 2
             cal = future.iloc[:mid_idx].copy()
             test = future.iloc[mid_idx:].copy()
 
-        metadata["train_max_inspected_at"] = str(train["inspected_at"].max()) if len(train) else None
-        metadata["cal_max_inspected_at"] = str(cal["inspected_at"].max()) if len(cal) else None
-        metadata["test_min_inspected_at"] = str(test["inspected_at"].min()) if len(test) else None
+        metadata["train_max_information_available_at"] = str(train["information_available_at"].max()) if len(train) else None
+        metadata["cal_max_information_available_at"] = str(cal["information_available_at"].max()) if len(cal) else None
+        metadata["test_min_information_available_at"] = str(test["information_available_at"].min()) if len(test) else None
 
     elif mode == "spatial-temporal":
         if cutoff_date is None:
@@ -146,28 +146,24 @@ def split_dataset(
             wards = sorted(labeled["ward"].unique())
             n_holdout = max(1, int(len(wards) * 0.25))
             holdout_wards = list(rng.choice(wards, size=n_holdout, replace=False))
-            n_cal = max(1, len(holdout_wards) // 2)
-            cal_wards = holdout_wards[:n_cal]
-            test_wards = holdout_wards[n_cal:]
+            cal_wards, test_wards = train_test_split(holdout_wards, test_size=0.5, random_state=seed)
         else:
-            n_cal = max(1, len(holdout_wards) // 2)
-            cal_wards = holdout_wards[:n_cal]
-            test_wards = holdout_wards[n_cal:]
+            cal_wards, test_wards = train_test_split(holdout_wards, test_size=0.5, random_state=seed)
 
         metadata["cal_wards"] = [int(w) for w in cal_wards]
         metadata["test_wards"] = [int(w) for w in test_wards]
 
         # Train on past known wards
-        train = labeled[(~labeled["ward"].isin(holdout_wards)) & (labeled["inspected_at"] < cutoff)].copy()
+        train = labeled[(~labeled["ward"].isin(holdout_wards)) & (labeled["information_available_at"] < cutoff)].copy()
 
         # Cal on future cal unseen wards
-        cal = labeled[(labeled["ward"].isin(cal_wards)) & (labeled["inspected_at"] >= cutoff)].copy()
+        cal = labeled[(labeled["ward"].isin(cal_wards)) & (labeled["information_available_at"] >= cutoff)].copy()
 
         # Test on future test unseen wards
-        test = labeled[(labeled["ward"].isin(test_wards)) & (labeled["inspected_at"] >= cutoff)].copy()
+        test = labeled[(labeled["ward"].isin(test_wards)) & (labeled["information_available_at"] >= cutoff)].copy()
 
-        metadata["train_max_inspected_at"] = str(train["inspected_at"].max()) if len(train) else None
-        metadata["test_min_inspected_at"] = str(test["inspected_at"].min()) if len(test) else None
+        metadata["train_max_information_available_at"] = str(train["information_available_at"].max()) if len(train) else None
+        metadata["test_min_information_available_at"] = str(test["information_available_at"].min()) if len(test) else None
 
     metadata["train_rows"] = len(train)
     metadata["calibration_rows"] = len(cal)
@@ -175,12 +171,14 @@ def split_dataset(
 
     # Automated invariants
     if mode in ("temporal", "spatial-temporal"):
-        if train["inspected_at"].max() >= pd.Timestamp(cutoff_date):
-            raise ValueError("Temporal leakage: Train contains future data")
-        if len(cal) > 0 and cal["inspected_at"].min() < pd.Timestamp(cutoff_date):
-            raise ValueError("Temporal leakage: Cal contains past data")
-        if len(test) > 0 and test["inspected_at"].min() < pd.Timestamp(cutoff_date):
-            raise ValueError("Temporal leakage: Test contains past data")
+        # C1 Invariant Check: No target labels in train after cutoff
+        if len(train) > 0:
+            if train["information_available_at"].max() >= pd.Timestamp(cutoff_date):
+                raise ValueError("Leakage detected: train split contains labels >= cutoff_date.")
+        if len(cal) > 0 and cal["information_available_at"].min() < pd.Timestamp(cutoff_date):
+            raise ValueError("Leakage detected: cal split contains labels < cutoff_date.")
+        if len(test) > 0 and test["information_available_at"].min() < pd.Timestamp(cutoff_date):
+            raise ValueError("Leakage detected: test split contains labels < cutoff_date.")
 
     if mode in ("geographic", "spatial-temporal"):
         train_wards = set(train["ward"].unique())

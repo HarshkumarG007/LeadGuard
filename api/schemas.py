@@ -44,7 +44,7 @@ class PredictionResult(BaseModel):
     conformal_set: list[str] = Field(..., description="Materials not ruled out at confidence_level")
     confidence_level: float = Field(default=0.90, ge=0.0, le=1.0)
     uncertainty_score: float = Field(..., ge=0.0, le=1.0)
-    priority_score: float = Field(..., ge=0.0, le=1.0)
+    priority_score: float = Field(...)
     shap_top_features: list[SHAPFeature]
     model_version: str
     predicted_at: datetime
@@ -87,6 +87,25 @@ class PriorityQueueResponse(BaseModel):
     properties_within_budget: int
     items: list[PriorityQueueItem]
 
+
+# ---------------------------------------------------------------------------
+# Decisions (Policy Execution)
+# ---------------------------------------------------------------------------
+
+class DecisionIssueRequest(BaseModel):
+    """Request body for POST /v1/decisions/issue."""
+    
+    property_ids: list[str] = Field(..., min_length=1, max_length=1000)
+    decision_type: str = Field(default="inspection", pattern="^(inspection|intervention)$")
+    reasoning: str | None = Field(default=None, description="Optional reasoning for overriding or manual batching")
+    
+class DecisionIssueResponse(BaseModel):
+    """Response for POST /v1/decisions/issue."""
+    
+    decision_id: str
+    property_ids: list[str]
+    status: str
+    message: str
 
 # ---------------------------------------------------------------------------
 # Inspections (feedback loop)

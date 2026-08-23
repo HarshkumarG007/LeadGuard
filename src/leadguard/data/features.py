@@ -141,10 +141,10 @@ def _build_label_dependent_features(
     df = df.copy()
 
     # C1: Temporal Feature Provenance invariant
-    if as_of_date is not None and "inspected_at" in reference_df.columns:
-        ref_max_date = reference_df["inspected_at"].dropna().max()
+    if as_of_date is not None and "information_available_at" in reference_df.columns:
+        ref_max_date = reference_df["information_available_at"].dropna().max()
         if not pd.isna(ref_max_date):
-            assert ref_max_date <= pd.Timestamp(as_of_date), f"Leakage detected: reference data contains labels from {ref_max_date} which is after prediction date {as_of_date}"
+            assert ref_max_date <= pd.Timestamp(as_of_date), f"Leakage detected: reference data contains labels available from {ref_max_date} which is after prediction date {as_of_date}"
 
     # Distance to nearest known-lead property in the REFERENCE set
     known_lead = reference_df[reference_df["service_line_material"] == "Lead"][
@@ -174,15 +174,15 @@ def _build_label_dependent_features(
     df["known_lead_rate_in_ward"] = df["known_lead_rate_in_ward"].fillna(0.0)
 
     # Days since last inspection
-    if "inspected_at" in reference_df.columns:
+    if "information_available_at" in reference_df.columns:
         if as_of_date is not None:
             current_t = pd.Timestamp(as_of_date)
         else:
-            current_t = reference_df["inspected_at"].max()
+            current_t = reference_df["information_available_at"].max()
             if pd.isna(current_t):
                 current_t = pd.Timestamp.now()
 
-        last_insp_ward = reference_df.dropna(subset=["inspected_at"]).groupby("ward")["inspected_at"].max()
+        last_insp_ward = reference_df.dropna(subset=["information_available_at"]).groupby("ward")["information_available_at"].max()
         last_insp_ward.name = "_last_ward_insp"
         df = df.merge(last_insp_ward, on="ward", how="left")
 

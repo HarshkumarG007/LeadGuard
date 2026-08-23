@@ -169,6 +169,15 @@ def generate_sample(n_rows: int = 7500, output_dir: Path = Path("data/sample")) 
             t = start_ts + time_frac * (end_ts - start_ts)
             inspected_dates.append(pd.Timestamp(t, unit="s"))
 
+    # Add information_available_at (synthetic 10 to 45 day delay)
+    info_avail_dates = []
+    for insp_dt in inspected_dates:
+        if pd.isna(insp_dt):
+            info_avail_dates.append(pd.NaT)
+        else:
+            delay_days = rng.integers(10, 45)
+            info_avail_dates.append(insp_dt + pd.Timedelta(days=int(delay_days)))
+
     df = pd.DataFrame(
         {
             "property_id": property_ids,
@@ -196,6 +205,7 @@ def generate_sample(n_rows: int = 7500, output_dir: Path = Path("data/sample")) 
             "service_line_material": materials_arr,
             "material_source": sources,
             "inspected_at": inspected_dates,
+            "information_available_at": info_avail_dates,
             "last_updated": datetime.now(UTC).replace(tzinfo=None),
         }
     )

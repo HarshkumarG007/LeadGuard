@@ -67,6 +67,8 @@ GROUP_D_OBSERVED = [
 ]
 
 FEATURE_SETS = {
+    "m0": [], # M0: Prevalence baseline (zero features, model learns intercept)
+    "m5": ["year_built"], # M5: Year built only
     "intrinsic": GROUP_A_INTRINSIC,
     "intrinsic_geo": GROUP_A_INTRINSIC + GROUP_B_GEO,
     "intrinsic_geo_process": GROUP_A_INTRINSIC + GROUP_B_GEO + GROUP_C_PROCESS,
@@ -326,6 +328,15 @@ def train_xgboost(
     # ---------------------------------------------------------------------------
     test_proba = calibrated_model.predict_proba(X_test)[:, 1]
     m_eval = compute_metrics(y_test, test_proba, prefix="test_eval_")
+    
+    # Save predictions for bootstrapping
+    preds_df = pd.DataFrame({
+        "property_id": test_geo["property_id"],
+        "ward": test_geo["ward"],
+        "y_true": y_test,
+        "y_pred": test_proba
+    })
+    preds_df.to_parquet(output_dir / "predictions.parquet")
 
     # Gate check vs baseline RF
     baseline_path = Path(baseline_metrics_path)

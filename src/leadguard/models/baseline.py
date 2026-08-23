@@ -110,6 +110,21 @@ class YearBuiltHeuristic:
         return np.column_stack([1 - p_lead, p_lead])
 
 
+class PrevalenceBaseline:
+    """M0 Baseline: Predicts the training set prevalence (intercept only)."""
+
+    def __init__(self):
+        self.prevalence = 0.5
+
+    def fit(self, X: np.ndarray, y: np.ndarray):
+        self.prevalence = float(np.mean(y))
+
+    def predict_proba(self, X: np.ndarray) -> np.ndarray:
+        n = X.shape[0]
+        p_lead = np.full(n, self.prevalence)
+        return np.column_stack([1 - p_lead, p_lead])
+
+
 def train_baselines(
     features_path: Path | str = "data/processed/features.parquet",
     output_dir: Path | str = "models/baseline",
@@ -197,10 +212,25 @@ def train_baselines(
     }
 
     # -----------------------------------------------------------------------
+    # Baseline M0 — Prevalence intercept
+    # -----------------------------------------------------------------------
+    prevalence_model = PrevalenceBaseline()
+    
+    X_train_full, y_train_full = _prep_xy(train_f, FULL_FEATURES)
+    prevalence_model.fit(X_train_full, y_train_full)
+
+    m_eval_prev = compute_metrics(
+        y_test_full, prevalence_model.predict_proba(X_test_full)[:, 1], prefix="test_eval_"
+    )
+    all_metrics["prevalence"] = {
+        "pr_auc": m_eval_prev["test_eval_pr_auc"],
+        **m_eval_prev,
+    }
+
+    # -----------------------------------------------------------------------
     # Baseline 1 — Logistic regression
     # -----------------------------------------------------------------------
     scaler = StandardScaler()
-    X_train_full, y_train_full = _prep_xy(train_f, FULL_FEATURES)
     X_test_f_full, y_test_f_full = _prep_xy(test_f, FULL_FEATURES)
 
     lr_cfg = cfg.get("baseline", {}).get("logistic_regression", {})

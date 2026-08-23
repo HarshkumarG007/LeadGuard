@@ -14,6 +14,7 @@ Usage:
 from __future__ import annotations
 
 import logging
+import json
 from pathlib import Path
 
 import numpy as np
@@ -38,35 +39,87 @@ def _load_scoring_config(config_path: Path = Path("configs/scoring.yaml")) -> di
     return {"lambda1": 0.60, "lambda2": 0.25, "lambda3": 0.15}
 
 
-def compute_priority_score(
+def compute_expected_utility(
     p_lead: np.ndarray,
-    uncertainty_score: np.ndarray,
+    intervention_value: float | np.ndarray,
+    cost: float | np.ndarray,
     equity_boost: np.ndarray,
-    strategy: str,
-    lambda1: float = 0.60,
-    lambda2: float = 0.25,
-    lambda3: float = 0.15,
+    equity_weight: float = 1.0,
 ) -> np.ndarray:
-    """Compute composite priority score based on strategy."""
-    if strategy == "random":
-        return np.random.rand(len(p_lead))
-    elif strategy == "risk":
-        return p_lead
-    elif strategy == "uncertainty":
-        return uncertainty_score
-    elif strategy == "risk_uncertainty":
-        l1, l2 = lambda1 / (lambda1 + lambda2), lambda2 / (lambda1 + lambda2)
-        return l1 * p_lead + l2 * uncertainty_score
-    elif strategy == "risk_uncertainty_equity":
-        if abs(lambda1 + lambda2 + lambda3 - 1.0) > 1e-4:
-            raise ValueError("Weights must sum to 1.0")
-        return lambda1 * p_lead + lambda2 * uncertainty_score + lambda3 * equity_boost
-    elif strategy == "oracle":
-        # Handled externally (always selects true leads)
-        return np.zeros(len(p_lead))
-    else:
-        raise ValueError(f"Unknown strategy: {strategy}")
+    """Compute expected utility of an intervention.
+    
+    Formula: EU = P(Lead) * intervention_value - cost + equity_boost * equity_weight
+    
+    Args:
+        p_lead: Probability of lead.
+        intervention_value: Monetized or util-based value of intervention (V_i).
+        cost: Cost of intervention (C_i).
+        equity_boost: Tract-level equity weight.
+        equity_weight: Scaling factor for equity.
+        
+    Returns:
+        Array of expected utilities.
+    """
+    if np.isscalar(intervention_value):
+        intervention_value = np.full_like(p_lead, intervention_value)
+    if np.isscalar(cost):
+        cost = np.full_like(p_lead, cost)
+        
+    return (p_lead * intervention_value) - cost + (equity_boost * equity_weight)
 
+def compute_priority_score(*args, **kwargs):
+    """Deprecated. Use compute_expected_utility instead."""
+    import warnings
+    warnings.warn("compute_priority_score is deprecated. Use compute_expected_utility.", DeprecationWarning)
+    # Temporary fallback for any old callers
+    p_lead = args[0] if args else kwargs.get('p_lead')
+    return p_lead
+
+
+def compute_approximate_evi(
+    p_lead: np.ndarray,
+    intervention_value: float | np.ndarray,
+    intervention_cost: float | np.ndarray,
+    equity_boost: np.ndarray,
+    equity_weight: float = 1.0,
+) -> np.ndarray:
+    """Compute Approximate Expected Value of Information (EVI).
+    
+    Gross EVI is the expected improvement in decision utility from learning the true label.
+    
+    Current policy: Replace if EU_replace > 0.
+    Current utility = max(0, EU_replace(p_lead))
+    
+    If we inspect, we learn Y (Lead=1 or NotLead=0).
+    Expected future utility = p_lead * max(0, EU_replace(1)) + (1 - p_lead) * max(0, EU_replace(0))
+    
+    Approximate EVI = Expected future utility - Current utility
+    
+    Args:
+        p_lead: Prior probability of lead.
+        intervention_value: Value of intervention (V_i).
+        intervention_cost: Cost of intervention (C_i).
+        equity_boost: Tract-level equity weight.
+        equity_weight: Scaling factor for equity.
+        
+    Returns:
+        Array of Gross EVI (in utility units).
+    """
+    eu_current = compute_expected_utility(p_lead, intervention_value, intervention_cost, equity_boost, equity_weight)
+    u_current = np.maximum(0, eu_current)
+    
+    eu_if_lead = compute_expected_utility(np.ones_like(p_lead), intervention_value, intervention_cost, equity_boost, equity_weight)
+    u_if_lead = np.maximum(0, eu_if_lead)
+    
+    eu_if_not_lead = compute_expected_utility(np.zeros_like(p_lead), intervention_value, intervention_cost, equity_boost, equity_weight)
+    u_if_not_lead = np.maximum(0, eu_if_not_lead)
+    
+    expected_future_u = (p_lead * u_if_lead) + ((1 - p_lead) * u_if_not_lead)
+    
+    evi = expected_future_u - u_current
+    
+    # Due to floating point math, ensure EVI >= 0
+    return np.maximum(0, evi)
 
 def simulate_active_learning(
     features_path: Path | str = "data/processed/features.parquet",
@@ -214,7 +267,23 @@ def simulate_active_learning(
     res_df = pd.DataFrame(results)
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     res_df.to_csv(output_path, index=False)
-    logger.info("Active learning simulation written to %s", output_path)
+    
+    # Write JSONL decision log
+    log_path = Path(output_path).with_suffix(".jsonl")
+    with open(log_path, "w") as f:
+        for r in results:
+            f.write(json.dumps({
+                "round": r["round"],
+                "strategy": r["strategy"],
+                "model_version": "xgboost_v1",
+                "feature_version": "intrinsic_geo_v1",
+                "policy_version": "scoring_v1",
+                "outcome_available_at": pd.Timestamp.now().isoformat(),
+                "cumulative_inspections": r["cumulative_inspections"],
+                "pr_auc_remaining": r["pr_auc_remaining"]
+            }) + "\n")
+            
+    logger.info("Active learning simulation written to %s and %s", output_path, log_path)
     return res_df
 
 

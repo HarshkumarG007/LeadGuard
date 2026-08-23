@@ -43,6 +43,7 @@ class ModelState:
     model_version: str = "unknown"
     metrics: dict = field(default_factory=dict)
     load_errors: list[str] = field(default_factory=list)
+    shap_explainer: object = None
 
     @property
     def is_ready(self) -> bool:
@@ -125,6 +126,22 @@ def load_artifacts(
         
         state.model = load_serving_model(model_dir)
         logger.info("Calibrated model loaded from %s", model_dir)
+        
+        try:
+            import shap
+            # Initialize explainer on the raw XGBoost model to save time later
+            # (assuming model is calibrated, the base estimator is often the target for SHAP)
+            # Actually, TreeExplainer needs the raw booster
+            if hasattr(state.model, "estimator"):
+                # if it's a CalibratedClassifierCV
+                raw_model = state.model.estimator
+            else:
+                raw_model = state.model
+            state.shap_explainer = shap.TreeExplainer(raw_model)
+            logger.info("SHAP TreeExplainer initialized and cached.")
+        except Exception as shap_err:
+            logger.warning("Failed to initialize SHAP TreeExplainer: %s", shap_err)
+
     except Exception as e:
         msg = f"Failed to load serving model: {e}"
         logger.error(msg)
